@@ -359,7 +359,7 @@ def format_weight_loss_section(inventory_data):
     if not inventory_data:
         return ""
     
-    section = "*📊 Monthly Weight Loss Analysis:*\n"
+    section = "*📊 Monthly Weight Loss Analysis (Cold Room Kaduna → Nasarawa):*\n"
     
     # Weight loss totals
     weight_loss_products = [
@@ -372,7 +372,7 @@ def format_weight_loss_section(inventory_data):
         ('breast', 'total_breast_weight_loss')
     ]
     
-    section += "\n*Current Month Weight Loss:*\n"
+    section += "\n*Current Month Weight Loss (Kaduna → Nasarawa):*\n"
     for product, loss_key in weight_loss_products:
         loss_value = inventory_data.get(loss_key, 0)
         if loss_value != 0:
@@ -394,7 +394,7 @@ def format_weight_loss_section(inventory_data):
         ('breast', 'breast_weight_loss_pct_change')
     ]
     
-    section += "\n*Current Month-over-Month Performance:*\n"
+    section += "\n*Month-over-Month Performance (Current vs Previous | Kaduna → Nasarawa):*\n"
     for product, pct_key in pct_change_products:
         pct_value = inventory_data.get(pct_key, 0)
         product_display = product.replace('_', ' ').title()
