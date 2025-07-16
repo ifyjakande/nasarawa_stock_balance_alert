@@ -21,7 +21,7 @@ STOCK_SHEET_NAME = 'balance'
 STOCK_RANGE = 'A1:P3'  # Range covers A-P columns (Specification through TOTAL including Gizzard)
 
 INVENTORY_SHEET_NAME = 'summary'  # The sheet name from the inventory tracking spreadsheet
-INVENTORY_RANGE = 'A:AP'  # Get all columns (A to AP = 42 columns)
+INVENTORY_RANGE = 'A:ZZ'  # Get all columns dynamically (covers up to 702 columns)
 
 PARTS_SHEET_NAME = 'parts_balance'
 PARTS_RANGE = 'A1:H3'  # Adjust range to cover all parts data
