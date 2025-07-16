@@ -637,7 +637,7 @@ def send_combined_alert(webhook_url, stock_changes, stock_data, parts_changes, p
             print("No changes detected in either stock or parts. No alert needed.")
             return True
         
-        message = "🔔 *Inventory Changes Detected*\n\n"
+        message = "🔔 *Nasarawa Inventory Changes Detected*\n\n"
         print("Preparing combined changes message")
         
         # Add stock section if there are stock changes or if parts had changes
