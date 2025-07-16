@@ -9,10 +9,10 @@ from datetime import datetime
 import pytz
 
 # Constants for Stock Balance
-SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
+SPECIFICATION_SHEET_ID = os.environ.get('SPECIFICATION_SHEET_ID')
 INVENTORY_SHEET_ID = os.environ.get('INVENTORY_SHEET_ID')
-if not SPREADSHEET_ID:
-    raise ValueError("SPREADSHEET_ID environment variable not set")
+if not SPECIFICATION_SHEET_ID:
+    raise ValueError("SPECIFICATION_SHEET_ID environment variable not set")
 
 if not INVENTORY_SHEET_ID:
     raise ValueError("INVENTORY_SHEET_ID environment variable not set")
@@ -57,7 +57,7 @@ def get_sheet_data(service, sheet_name, range_name):
     try:
         sheet = service.spreadsheets()
         result = sheet.values().get(
-            spreadsheetId=SPREADSHEET_ID,
+            spreadsheetId=SPECIFICATION_SHEET_ID,
             range=f'{sheet_name}!{range_name}'
         ).execute()
         data = result.get('values', [])
