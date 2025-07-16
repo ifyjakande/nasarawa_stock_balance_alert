@@ -308,7 +308,7 @@ def get_inventory_data(service):
         inventory_data = {}
         for col, index in column_indices.items():
             if index == -1:  # Column doesn't exist
-                inventory_data[col] = 0.0 if col != 'year_month' else current_year_month
+                inventory_data[col] = current_year_month if col == 'year_month' else None
             elif len(current_month_row) > index:
                 try:
                     if col == 'year_month':
@@ -317,9 +317,9 @@ def get_inventory_data(service):
                         inventory_data[col] = float(current_month_row[index]) if current_month_row[index] else 0.0
                 except (ValueError, TypeError):
                     print(f"Invalid value for {col} in inventory sheet")
-                    inventory_data[col] = 0.0
+                    inventory_data[col] = None
             else:
-                inventory_data[col] = 0.0
+                inventory_data[col] = None
         
         return inventory_data
     except Exception as e:
@@ -374,8 +374,10 @@ def format_weight_loss_section(inventory_data):
     
     section += "\n*Current Month Weight Loss (Kaduna → Nasarawa):*\n"
     for product, loss_key in weight_loss_products:
-        loss_value = inventory_data.get(loss_key, 0)
-        if loss_value != 0:
+        loss_value = inventory_data.get(loss_key, None)
+        if loss_value is None:
+            section += f"• {product.replace('_', ' ').title()}: Not Available\n"
+        elif loss_value != 0:
             if loss_value > 0:
                 section += f"• {product.replace('_', ' ').title()}: +{loss_value:.2f} kg (gain)\n"
             else:
@@ -396,16 +398,20 @@ def format_weight_loss_section(inventory_data):
     
     section += "\n*Month-over-Month Performance (Current vs Previous | Kaduna → Nasarawa):*\n"
     for product, pct_key in pct_change_products:
-        pct_value = inventory_data.get(pct_key, 0)
+        pct_value = inventory_data.get(pct_key, None)
         product_display = product.replace('_', ' ').title()
-        interpretation = interpret_weight_loss_pct_change(pct_value, product_display)
         
-        if pct_value > 0:
-            section += f"• ⚠️ {interpretation}\n"
-        elif pct_value < 0:
-            section += f"• ✅ {interpretation}\n"
+        if pct_value is None:
+            section += f"• ❓ {product_display} weight loss: Not Available\n"
         else:
-            section += f"• ➖ {interpretation}\n"
+            interpretation = interpret_weight_loss_pct_change(pct_value, product_display)
+            
+            if pct_value > 0:
+                section += f"• ⚠️ {interpretation}\n"
+            elif pct_value < 0:
+                section += f"• ✅ {interpretation}\n"
+            else:
+                section += f"• ➖ {interpretation}\n"
     
     return section + "\n"
 
@@ -537,28 +543,36 @@ def format_stock_section(stock_changes, stock_data, inventory_data=None):
         inventory_balance = inventory_data.get('whole_chicken_quantity_stock_balance')
         gizzard_inventory_balance = inventory_data.get('gizzard_weight_stock_balance')
         
-        if inventory_balance is not None and total_pieces > 0:
+        if total_pieces > 0:
             section += "\n*Whole Chicken Stock Balance Comparison:*\n"
-            difference = int(total_pieces - inventory_balance)  # Convert to integer
-            if difference == 0:
-                section += "✅ Chicken stock balance matches inventory records\n"
-            else:
-                section += f"⚠️ Chicken stock balance discrepancy detected:\n"
+            if inventory_balance is None:
+                section += "❓ Inventory Records Total: Not Available\n"
                 section += f"• Specification Sheet Total: {total_pieces:,} pieces\n"
-                section += f"• Inventory Records Total: {int(inventory_balance):,} pieces\n"  # Convert to integer
-                section += f"• Difference: {abs(difference):,} pieces {'more' if difference > 0 else 'less'} in specification sheet\n"
+            else:
+                difference = int(total_pieces - inventory_balance)  # Convert to integer
+                if difference == 0:
+                    section += "✅ Chicken stock balance matches inventory records\n"
+                else:
+                    section += f"⚠️ Chicken stock balance discrepancy detected:\n"
+                    section += f"• Specification Sheet Total: {total_pieces:,} pieces\n"
+                    section += f"• Inventory Records Total: {int(inventory_balance):,} pieces\n"  # Convert to integer
+                    section += f"• Difference: {abs(difference):,} pieces {'more' if difference > 0 else 'less'} in specification sheet\n"
         
         # Add gizzard inventory balance comparison if available
-        if gizzard_inventory_balance is not None and current_gizzard_weight > 0:
+        if current_gizzard_weight > 0:
             section += "\n*Gizzard Stock Balance Comparison:*\n"
-            difference = current_gizzard_weight - gizzard_inventory_balance
-            if abs(difference) < 0.01:  # Allow for small floating point differences
-                section += "✅ Gizzard stock balance matches inventory records\n"
-            else:
-                section += f"⚠️ Gizzard stock balance discrepancy detected:\n"
+            if gizzard_inventory_balance is None:
+                section += "❓ Inventory Records Gizzard: Not Available\n"
                 section += f"• Specification Sheet Gizzard: {current_gizzard_weight:,.2f} kg\n"
-                section += f"• Inventory Records Gizzard: {gizzard_inventory_balance:,.2f} kg\n"
-                section += f"• Difference: {abs(difference):,.2f} kg {'more' if difference > 0 else 'less'} in specification sheet\n"
+            else:
+                difference = current_gizzard_weight - gizzard_inventory_balance
+                if abs(difference) < 0.01:  # Allow for small floating point differences
+                    section += "✅ Gizzard stock balance matches inventory records\n"
+                else:
+                    section += f"⚠️ Gizzard stock balance discrepancy detected:\n"
+                    section += f"• Specification Sheet Gizzard: {current_gizzard_weight:,.2f} kg\n"
+                    section += f"• Inventory Records Gizzard: {gizzard_inventory_balance:,.2f} kg\n"
+                    section += f"• Difference: {abs(difference):,.2f} kg {'more' if difference > 0 else 'less'} in specification sheet\n"
     
     return section
 
