@@ -538,7 +538,7 @@ def format_stock_section(stock_changes, stock_data, inventory_data=None):
         gizzard_inventory_balance = inventory_data.get('gizzard_weight_stock_balance')
         
         if inventory_balance is not None and total_pieces > 0:
-            section += "\n*Chicken Stock Balance Comparison:*\n"
+            section += "\n*Whole Chicken Stock Balance Comparison:*\n"
             difference = int(total_pieces - inventory_balance)  # Convert to integer
             if difference == 0:
                 section += "✅ Chicken stock balance matches inventory records\n"
