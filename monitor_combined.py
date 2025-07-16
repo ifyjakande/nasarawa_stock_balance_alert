@@ -272,11 +272,14 @@ def get_inventory_data(service):
         
         # Find column indices
         column_indices = {}
+        print(f"DEBUG: Available columns in inventory sheet: {headers}")
+        print(f"DEBUG: Looking for these columns: {required_columns}")
         try:
             for col in required_columns:
                 column_indices[col] = headers.index(col)
         except ValueError as e:
             print(f"Could not find required column in inventory sheet: {str(e)}")
+            print(f"DEBUG: Missing column from required list: {required_columns}")
             return None
             
         # Get current year-month in YYYY-MM format
