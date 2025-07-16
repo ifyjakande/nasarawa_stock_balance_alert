@@ -270,17 +270,18 @@ def get_inventory_data(service):
             'breast_weight_loss_pct_change'
         ]
         
-        # Find column indices
+        # Find column indices (handle missing columns gracefully)
         column_indices = {}
         print(f"DEBUG: Available columns in inventory sheet: {headers}")
         print(f"DEBUG: Looking for these columns: {required_columns}")
-        try:
-            for col in required_columns:
+        
+        for col in required_columns:
+            try:
                 column_indices[col] = headers.index(col)
-        except ValueError as e:
-            print(f"Could not find required column in inventory sheet: {str(e)}")
-            print(f"DEBUG: Missing column from required list: {required_columns}")
-            return None
+                print(f"DEBUG: Found column '{col}' at index {column_indices[col]}")
+            except ValueError:
+                print(f"DEBUG: Column '{col}' not found - will use default value of 0")
+                column_indices[col] = -1  # Mark as missing
             
         # Get current year-month in YYYY-MM format
         current_date = datetime.now(pytz.UTC).astimezone(pytz.timezone('Africa/Lagos'))
@@ -310,7 +311,10 @@ def get_inventory_data(service):
         # Extract all values into a dictionary
         inventory_data = {}
         for col, index in column_indices.items():
-            if len(current_month_row) > index:
+            if index == -1:  # Column doesn't exist
+                inventory_data[col] = 0.0 if col != 'year_month' else current_year_month
+                print(f"DEBUG: Using default value for missing column '{col}': {inventory_data[col]}")
+            elif len(current_month_row) > index:
                 try:
                     if col == 'year_month':
                         inventory_data[col] = current_month_row[index]
