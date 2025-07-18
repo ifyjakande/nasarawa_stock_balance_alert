@@ -241,7 +241,7 @@ def load_previous_discrepancy_state(state_file):
             print(f"Loading previous discrepancy state from {state_file}")
             with open(state_file, 'rb') as f:
                 data = pickle.load(f)
-                print(f"Previous discrepancy state loaded: {data}")
+                print("Previous discrepancy state loaded successfully")
                 return data
         print("No previous discrepancy state file found")
         return None
@@ -251,7 +251,7 @@ def load_previous_discrepancy_state(state_file):
 
 def save_discrepancy_state(discrepancy_value, state_file):
     """Save discrepancy state to file."""
-    print(f"Saving discrepancy state {discrepancy_value} to {state_file}")
+    print(f"Saving discrepancy state to {state_file}")
     try:
         os.makedirs(os.path.dirname(state_file), exist_ok=True)
         with open(state_file, 'wb') as f:
@@ -265,21 +265,21 @@ def detect_discrepancy_changes(previous_discrepancy, current_discrepancy, produc
     """Detect changes in discrepancy values."""
     if previous_discrepancy is None:
         if current_discrepancy is not None and current_discrepancy != 0:
-            print(f"New {product_name} discrepancy detected: {current_discrepancy}")
+            print(f"New {product_name} discrepancy detected")
             return True
         return False
     
     if current_discrepancy is None:
         if previous_discrepancy != 0:
-            print(f"{product_name} discrepancy resolved (was {previous_discrepancy}, now no data)")
+            print(f"{product_name} discrepancy resolved")
             return True
         return False
     
     if previous_discrepancy != current_discrepancy:
-        print(f"{product_name} discrepancy changed from {previous_discrepancy} to {current_discrepancy}")
+        print(f"{product_name} discrepancy changed")
         return True
     
-    print(f"No change in {product_name} discrepancy: {current_discrepancy}")
+    print(f"No change in {product_name} discrepancy")
     return False
 
 def get_inventory_data(service):
