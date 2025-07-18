@@ -746,7 +746,7 @@ def format_parts_section(parts_changes, parts_data):
 
 def format_discrepancy_alert(chicken_discrepancy, gizzard_discrepancy, stock_data, inventory_data):
     """Format discrepancy alert message."""
-    message = "⚠️ *Nasarawa Stock Discrepancy Alert*\n\n"
+    message = "⚠️ *Nasarawa Stock Balance Discrepancy Alert*\n\n"
     
     # Add chicken discrepancy section
     if chicken_discrepancy is not None and chicken_discrepancy != 0:
