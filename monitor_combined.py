@@ -753,7 +753,7 @@ def format_discrepancy_alert(chicken_discrepancy, gizzard_discrepancy, stock_dat
         total_pieces = calculate_total_pieces(stock_data)
         inventory_balance = inventory_data.get('whole_chicken_quantity_stock_balance') if inventory_data else None
         
-        message += "*🐔 Whole Chicken Stock Discrepancy:*\n"
+        message += "*🐔 Whole Chicken Stock Balance Discrepancy:*\n"
         if total_pieces is not None and inventory_balance is not None:
             message += f"• Specification Sheet Total: {total_pieces:,} pieces\n"
             message += f"• Inventory Records Total: {int(inventory_balance):,} pieces\n"
@@ -776,7 +776,7 @@ def format_discrepancy_alert(chicken_discrepancy, gizzard_discrepancy, stock_dat
         
         gizzard_inventory_balance = inventory_data.get('gizzard_weight_stock_balance') if inventory_data else None
         
-        message += "*🥘 Gizzard Stock Discrepancy:*\n"
+        message += "*🥘 Gizzard Stock Balance Discrepancy:*\n"
         if gizzard_weight > 0 and gizzard_inventory_balance is not None:
             message += f"• Specification Sheet Gizzard: {gizzard_weight:,.2f} kg\n"
             message += f"• Inventory Records Gizzard: {gizzard_inventory_balance:,.2f} kg\n"
