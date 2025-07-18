@@ -37,6 +37,10 @@ os.makedirs(DATA_DIR, exist_ok=True)
 STOCK_STATE_FILE = os.path.join(DATA_DIR, 'previous_stock_state.pickle')
 PARTS_STATE_FILE = os.path.join(DATA_DIR, 'previous_parts_state.pickle')
 
+# State files for tracking discrepancies
+CHICKEN_DISCREPANCY_STATE_FILE = os.path.join(DATA_DIR, 'previous_chicken_discrepancy_state.pickle')
+GIZZARD_DISCREPANCY_STATE_FILE = os.path.join(DATA_DIR, 'previous_gizzard_discrepancy_state.pickle')
+
 class APIError(Exception):
     """Custom exception for API related errors."""
     pass
@@ -228,6 +232,55 @@ def detect_parts_changes(previous_data, current_data):
         print("Parts state file updated with current data. Next run should work correctly.")
         # Return empty changes to avoid further errors
         return []
+
+def load_previous_discrepancy_state(state_file):
+    """Load previous discrepancy state from file."""
+    print(f"Checking for previous discrepancy state file {state_file}")
+    try:
+        if os.path.exists(state_file):
+            print(f"Loading previous discrepancy state from {state_file}")
+            with open(state_file, 'rb') as f:
+                data = pickle.load(f)
+                print(f"Previous discrepancy state loaded: {data}")
+                return data
+        print("No previous discrepancy state file found")
+        return None
+    except Exception as e:
+        print(f"Error loading previous discrepancy state: {str(e)}")
+        return None
+
+def save_discrepancy_state(discrepancy_value, state_file):
+    """Save discrepancy state to file."""
+    print(f"Saving discrepancy state {discrepancy_value} to {state_file}")
+    try:
+        os.makedirs(os.path.dirname(state_file), exist_ok=True)
+        with open(state_file, 'wb') as f:
+            pickle.dump(discrepancy_value, f)
+        print(f"Discrepancy state saved successfully to {state_file}")
+    except Exception as e:
+        print(f"Error saving discrepancy state: {str(e)}")
+        raise APIError("Failed to save discrepancy state file")
+
+def detect_discrepancy_changes(previous_discrepancy, current_discrepancy, product_name):
+    """Detect changes in discrepancy values."""
+    if previous_discrepancy is None:
+        if current_discrepancy is not None and current_discrepancy != 0:
+            print(f"New {product_name} discrepancy detected: {current_discrepancy}")
+            return True
+        return False
+    
+    if current_discrepancy is None:
+        if previous_discrepancy != 0:
+            print(f"{product_name} discrepancy resolved (was {previous_discrepancy}, now no data)")
+            return True
+        return False
+    
+    if previous_discrepancy != current_discrepancy:
+        print(f"{product_name} discrepancy changed from {previous_discrepancy} to {current_discrepancy}")
+        return True
+    
+    print(f"No change in {product_name} discrepancy: {current_discrepancy}")
+    return False
 
 def get_inventory_data(service):
     """Fetch all inventory data from the inflow/release sheet."""
@@ -434,6 +487,54 @@ def calculate_total_pieces(stock_data):
         return total
     except Exception as e:
         print(f"Error calculating total pieces: {str(e)}")
+        return None
+
+def calculate_chicken_discrepancy(stock_data, inventory_data):
+    """Calculate discrepancy between specification sheet and inventory for whole chicken."""
+    if not inventory_data:
+        return None
+        
+    try:
+        total_pieces = calculate_total_pieces(stock_data)
+        inventory_balance = inventory_data.get('whole_chicken_quantity_stock_balance')
+        
+        if total_pieces is None or inventory_balance is None:
+            return None
+            
+        # Return the difference (specification - inventory)
+        return int(total_pieces - inventory_balance)
+    except Exception as e:
+        print(f"Error calculating chicken discrepancy: {str(e)}")
+        return None
+
+def calculate_gizzard_discrepancy(stock_data, inventory_data):
+    """Calculate discrepancy between specification sheet and inventory for gizzard."""
+    if not inventory_data:
+        return None
+        
+    try:
+        headers = stock_data[0]
+        values = stock_data[1]
+        gizzard_weight = 0
+        
+        # Find gizzard weight in specification sheet
+        for i in range(len(headers)):
+            if headers[i].lower() == 'gizzard':
+                try:
+                    gizzard_weight = float(values[i])
+                    break
+                except (ValueError, TypeError):
+                    continue
+        
+        gizzard_inventory_balance = inventory_data.get('gizzard_weight_stock_balance')
+        
+        if gizzard_weight == 0 or gizzard_inventory_balance is None:
+            return None
+            
+        # Return the difference (specification - inventory)
+        return round(gizzard_weight - gizzard_inventory_balance, 2)
+    except Exception as e:
+        print(f"Error calculating gizzard discrepancy: {str(e)}")
         return None
 
 def format_stock_section(stock_changes, stock_data, inventory_data=None):
@@ -643,6 +744,51 @@ def format_parts_section(parts_changes, parts_data):
     
     return section
 
+def format_discrepancy_alert(chicken_discrepancy, gizzard_discrepancy, stock_data, inventory_data):
+    """Format discrepancy alert message."""
+    message = "⚠️ *Nasarawa Stock Discrepancy Alert*\n\n"
+    
+    # Add chicken discrepancy section
+    if chicken_discrepancy is not None and chicken_discrepancy != 0:
+        total_pieces = calculate_total_pieces(stock_data)
+        inventory_balance = inventory_data.get('whole_chicken_quantity_stock_balance') if inventory_data else None
+        
+        message += "*🐔 Whole Chicken Stock Discrepancy:*\n"
+        if total_pieces is not None and inventory_balance is not None:
+            message += f"• Specification Sheet Total: {total_pieces:,} pieces\n"
+            message += f"• Inventory Records Total: {int(inventory_balance):,} pieces\n"
+            message += f"• Discrepancy: {abs(chicken_discrepancy):,} pieces {'more' if chicken_discrepancy > 0 else 'less'} in specification sheet\n\n"
+    
+    # Add gizzard discrepancy section
+    if gizzard_discrepancy is not None and gizzard_discrepancy != 0:
+        headers = stock_data[0]
+        values = stock_data[1]
+        gizzard_weight = 0
+        
+        # Find gizzard weight in specification sheet
+        for i in range(len(headers)):
+            if headers[i].lower() == 'gizzard':
+                try:
+                    gizzard_weight = float(values[i])
+                    break
+                except (ValueError, TypeError):
+                    continue
+        
+        gizzard_inventory_balance = inventory_data.get('gizzard_weight_stock_balance') if inventory_data else None
+        
+        message += "*🥘 Gizzard Stock Discrepancy:*\n"
+        if gizzard_weight > 0 and gizzard_inventory_balance is not None:
+            message += f"• Specification Sheet Gizzard: {gizzard_weight:,.2f} kg\n"
+            message += f"• Inventory Records Gizzard: {gizzard_inventory_balance:,.2f} kg\n"
+            message += f"• Discrepancy: {abs(gizzard_discrepancy):,.2f} kg {'more' if gizzard_discrepancy > 0 else 'less'} in specification sheet\n\n"
+    
+    # Get current time in WAT
+    wat_tz = pytz.timezone('Africa/Lagos')
+    current_time = datetime.now(pytz.UTC).astimezone(wat_tz)
+    message += f"\n_Updated at: {current_time.strftime('%Y-%m-%d %I:%M:%S %p')} WAT_"
+    
+    return message
+
 def send_combined_alert(webhook_url, stock_changes, stock_data, parts_changes, parts_data, inventory_data=None):
     """Send combined alert to Google Space."""
     try:
@@ -686,6 +832,24 @@ def send_combined_alert(webhook_url, stock_changes, stock_data, parts_changes, p
         print(f"Error sending alert to Google Space: {str(e)}")
         return False
 
+def send_discrepancy_alert(webhook_url, chicken_discrepancy, gizzard_discrepancy, stock_data, inventory_data):
+    """Send discrepancy alert to Google Space."""
+    try:
+        message = format_discrepancy_alert(chicken_discrepancy, gizzard_discrepancy, stock_data, inventory_data)
+        
+        payload = {
+            "text": message
+        }
+        
+        print("Sending discrepancy alert webhook request...")
+        response = requests.post(webhook_url, json=payload, timeout=10)
+        response.raise_for_status()
+        print(f"Discrepancy alert webhook response status: {response.status_code}")
+        return True
+    except requests.exceptions.RequestException as e:
+        print(f"Error sending discrepancy alert to Google Space: {str(e)}")
+        return False
+
 def main():
     try:
         # Get webhook URL from environment variable
@@ -707,15 +871,17 @@ def main():
         # Get complete inventory data for comparison and analysis
         inventory_data = get_inventory_data(service)
         
-        # Get inventory balance for comparison (backward compatibility)
-        inventory_balance = inventory_data.get('whole_chicken_quantity_stock_balance') if inventory_data else None
-        
-        # Get gizzard inventory balance for comparison (backward compatibility)
-        gizzard_inventory_balance = inventory_data.get('gizzard_weight_stock_balance') if inventory_data else None
-        
         # Load previous states
         previous_stock_data = load_previous_state(STOCK_STATE_FILE)
         previous_parts_data = load_previous_state(PARTS_STATE_FILE)
+        
+        # Load previous discrepancy states
+        previous_chicken_discrepancy = load_previous_discrepancy_state(CHICKEN_DISCREPANCY_STATE_FILE)
+        previous_gizzard_discrepancy = load_previous_discrepancy_state(GIZZARD_DISCREPANCY_STATE_FILE)
+        
+        # Calculate current discrepancies
+        current_chicken_discrepancy = calculate_chicken_discrepancy(stock_data, inventory_data)
+        current_gizzard_discrepancy = calculate_gizzard_discrepancy(stock_data, inventory_data)
         
         # Initialize flags for state updates
         stock_state_needs_update = True
@@ -737,6 +903,14 @@ def main():
             print("Checking for parts changes...")
             parts_changes = detect_parts_changes(previous_parts_data, parts_data)
         
+        # Check for discrepancy changes
+        chicken_discrepancy_changed = detect_discrepancy_changes(
+            previous_chicken_discrepancy, current_chicken_discrepancy, "chicken"
+        )
+        gizzard_discrepancy_changed = detect_discrepancy_changes(
+            previous_gizzard_discrepancy, current_gizzard_discrepancy, "gizzard"
+        )
+        
         # Send combined alert if there are any changes
         if stock_changes or parts_changes:
             print("Changes detected, sending combined alert...")
@@ -747,11 +921,23 @@ def main():
         else:
             print("No changes detected in either stock or parts, updating state files...")
         
+        # Send discrepancy alert if there are discrepancy changes
+        if chicken_discrepancy_changed or gizzard_discrepancy_changed:
+            print("Discrepancy changes detected, sending discrepancy alert...")
+            if send_discrepancy_alert(webhook_url, current_chicken_discrepancy, current_gizzard_discrepancy, stock_data, inventory_data):
+                print("Discrepancy alert sent successfully")
+            else:
+                print("Failed to send discrepancy alert")
+        
         # Always update both state files at the end
         if stock_state_needs_update:
             save_current_state(stock_data, STOCK_STATE_FILE)
         if parts_state_needs_update:
             save_current_state(parts_data, PARTS_STATE_FILE)
+        
+        # Update discrepancy state files
+        save_discrepancy_state(current_chicken_discrepancy, CHICKEN_DISCREPANCY_STATE_FILE)
+        save_discrepancy_state(current_gizzard_discrepancy, GIZZARD_DISCREPANCY_STATE_FILE)
 
     except APIError as e:
         print(f"API Error: {str(e)}")
