@@ -921,13 +921,15 @@ def main():
         else:
             print("No changes detected in either stock or parts, updating state files...")
         
-        # Send discrepancy alert if there are discrepancy changes
-        if chicken_discrepancy_changed or gizzard_discrepancy_changed:
+        # Send discrepancy alert if there are discrepancy changes and inventory data is available
+        if (chicken_discrepancy_changed or gizzard_discrepancy_changed) and inventory_data is not None:
             print("Discrepancy changes detected, sending discrepancy alert...")
             if send_discrepancy_alert(webhook_url, current_chicken_discrepancy, current_gizzard_discrepancy, stock_data, inventory_data):
                 print("Discrepancy alert sent successfully")
             else:
                 print("Failed to send discrepancy alert")
+        elif (chicken_discrepancy_changed or gizzard_discrepancy_changed) and inventory_data is None:
+            print("Discrepancy changes detected but inventory data unavailable, skipping discrepancy alert")
         
         # Always update both state files at the end
         if stock_state_needs_update:
@@ -935,9 +937,12 @@ def main():
         if parts_state_needs_update:
             save_current_state(parts_data, PARTS_STATE_FILE)
         
-        # Update discrepancy state files
-        save_discrepancy_state(current_chicken_discrepancy, CHICKEN_DISCREPANCY_STATE_FILE)
-        save_discrepancy_state(current_gizzard_discrepancy, GIZZARD_DISCREPANCY_STATE_FILE)
+        # Update discrepancy state files only if inventory data is available
+        if inventory_data is not None:
+            save_discrepancy_state(current_chicken_discrepancy, CHICKEN_DISCREPANCY_STATE_FILE)
+            save_discrepancy_state(current_gizzard_discrepancy, GIZZARD_DISCREPANCY_STATE_FILE)
+        else:
+            print("Inventory data unavailable, preserving previous discrepancy state")
 
     except APIError as e:
         print(f"API Error: {str(e)}")
