@@ -1,5 +1,4 @@
 import os
-import json
 import pickle
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -379,19 +378,6 @@ def get_inventory_data(service):
         print(f"Error fetching inventory data: {str(e)}")
         return None
 
-def get_inventory_balance(service):
-    """Fetch chicken quantity balance from inventory data (for backward compatibility)."""
-    inventory_data = get_inventory_data(service)
-    if inventory_data:
-        return inventory_data.get('whole_chicken_quantity_stock_balance', None)
-    return None
-
-def get_gizzard_inventory_balance(service):
-    """Fetch gizzard weight balance from inventory data (for backward compatibility)."""
-    inventory_data = get_inventory_data(service)
-    if inventory_data:
-        return inventory_data.get('gizzard_weight_stock_balance', None)
-    return None
 
 def interpret_weight_loss_pct_change(pct_change, product_name):
     """Interpret percentage change for weight loss based on professional guidelines."""
