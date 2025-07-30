@@ -537,9 +537,45 @@ def calculate_gizzard_discrepancy(stock_data, inventory_data):
         print(f"Error calculating gizzard discrepancy: {str(e)}")
         return None
 
-def format_stock_section(stock_changes, stock_data, inventory_data=None):
+def format_stock_section(stock_changes, stock_data, inventory_data=None, previous_chicken_discrepancy=None, previous_gizzard_discrepancy=None):
     """Format the stock section of the alert message."""
     section = ""
+    
+    # Calculate current discrepancies for comparison
+    current_chicken_discrepancy = None
+    current_gizzard_discrepancy = None
+    
+    if inventory_data:
+        current_chicken_discrepancy = calculate_chicken_discrepancy(stock_data, inventory_data)
+        current_gizzard_discrepancy = calculate_gizzard_discrepancy(stock_data, inventory_data)
+    
+    # Add inventory balance difference changes if any discrepancies changed
+    discrepancy_changes = []
+    
+    # Check for chicken discrepancy changes
+    if (previous_chicken_discrepancy is not None or current_chicken_discrepancy is not None) and previous_chicken_discrepancy != current_chicken_discrepancy:
+        prev_val = previous_chicken_discrepancy if previous_chicken_discrepancy is not None else 0
+        curr_val = current_chicken_discrepancy if current_chicken_discrepancy is not None else 0
+        
+        prev_str = f"{prev_val:+,} pieces" if prev_val != 0 else "0 pieces"
+        curr_str = f"{curr_val:+,} pieces" if curr_val != 0 else "0 pieces"
+        discrepancy_changes.append(("Whole Chicken Balance Difference", prev_str, curr_str))
+    
+    # Check for gizzard discrepancy changes
+    if (previous_gizzard_discrepancy is not None or current_gizzard_discrepancy is not None) and previous_gizzard_discrepancy != current_gizzard_discrepancy:
+        prev_val = previous_gizzard_discrepancy if previous_gizzard_discrepancy is not None else 0
+        curr_val = current_gizzard_discrepancy if current_gizzard_discrepancy is not None else 0
+        
+        prev_str = f"{prev_val:+,.2f} kg" if prev_val != 0 else "0.00 kg"
+        curr_str = f"{curr_val:+,.2f} kg" if curr_val != 0 else "0.00 kg"
+        discrepancy_changes.append(("Gizzard Balance Difference", prev_str, curr_str))
+    
+    # Add discrepancy changes section if any
+    if discrepancy_changes:
+        section += "*Inventory Balance Difference Changes:*\n"
+        for change_type, old_val, new_val in discrepancy_changes:
+            section += f"• {change_type}: {old_val} → {new_val}\n"
+        section += "\n"
     
     # Add stock changes if any
     if stock_changes:
@@ -654,23 +690,7 @@ def format_stock_section(stock_changes, stock_data, inventory_data=None):
         if current_gizzard_weight > 0 and gizzard_inventory_balance is not None:
             gizzard_discrepancy = current_gizzard_weight - gizzard_inventory_balance
         
-        # Show discrepancy section if any discrepancies exist
-        if (chicken_discrepancy is not None and chicken_discrepancy != 0) or (gizzard_discrepancy is not None and abs(gizzard_discrepancy) >= 0.01):
-            section += "\n🚨 *STOCK BALANCE DISCREPANCY DETECTED:*\n"
-            
-            # Chicken discrepancy
-            if chicken_discrepancy is not None and chicken_discrepancy != 0:
-                section += f"• 🐔 Whole Chicken: {abs(chicken_discrepancy):,} pieces {'more' if chicken_discrepancy > 0 else 'less'} in specification sheet\n"
-                section += f"  - Specification: {total_pieces:,} pieces | Inventory: {int(inventory_balance):,} pieces\n"
-            
-            # Gizzard discrepancy  
-            if gizzard_discrepancy is not None and abs(gizzard_discrepancy) >= 0.01:
-                section += f"• 🥘 Gizzard: {abs(gizzard_discrepancy):,.2f} kg {'more' if gizzard_discrepancy > 0 else 'less'} in specification sheet\n"
-                section += f"  - Specification: {current_gizzard_weight:,.2f} kg | Inventory: {gizzard_inventory_balance:,.2f} kg\n"
-            
-            section += "\n"
-        
-        # Show normal comparison section
+        # Show individual product comparison sections
         if total_pieces > 0:
             section += "\n*Whole Chicken Stock Balance Comparison:*\n"
             if inventory_balance is None:
@@ -680,8 +700,10 @@ def format_stock_section(stock_changes, stock_data, inventory_data=None):
                 if chicken_discrepancy == 0:
                     section += "✅ Chicken stock balance matches inventory records\n"
                 else:
+                    section += "⚠️ Whole chicken stock balance discrepancy detected:\n"
                     section += f"• Specification Sheet Total: {total_pieces:,} pieces\n"
                     section += f"• Inventory Records Total: {int(inventory_balance):,} pieces\n"
+                    section += f"• Difference: {abs(chicken_discrepancy):,} pieces {'less' if chicken_discrepancy < 0 else 'more'} in specification sheet\n"
         
         # Add gizzard inventory balance comparison if available
         if current_gizzard_weight > 0:
@@ -693,8 +715,10 @@ def format_stock_section(stock_changes, stock_data, inventory_data=None):
                 if gizzard_discrepancy is not None and abs(gizzard_discrepancy) < 0.01:
                     section += "✅ Gizzard stock balance matches inventory records\n"
                 else:
+                    section += "⚠️ Gizzard stock balance discrepancy detected:\n"
                     section += f"• Specification Sheet Gizzard: {current_gizzard_weight:,.2f} kg\n"
                     section += f"• Inventory Records Gizzard: {gizzard_inventory_balance:,.2f} kg\n"
+                    section += f"• Difference: {abs(gizzard_discrepancy):,.2f} kg {'less' if gizzard_discrepancy < 0 else 'more'} in specification sheet\n"
     
     return section
 
@@ -766,24 +790,41 @@ def format_parts_section(parts_changes, parts_data):
     return section
 
 
-def send_combined_alert(webhook_url, stock_changes, stock_data, parts_changes, parts_data, inventory_data=None):
+def send_combined_alert(webhook_url, stock_changes, stock_data, parts_changes, parts_data, inventory_data=None, previous_chicken_discrepancy=None, previous_gizzard_discrepancy=None):
     """Send combined alert to Google Space."""
     try:
-        # Only proceed if there are actual changes
-        if not stock_changes and not parts_changes:
-            print("No changes detected in either stock or parts. No alert needed.")
+        # Calculate discrepancy changes to determine if alert is needed
+        discrepancy_changes_exist = False
+        if inventory_data:
+            current_chicken_discrepancy = calculate_chicken_discrepancy(stock_data, inventory_data)
+            current_gizzard_discrepancy = calculate_gizzard_discrepancy(stock_data, inventory_data)
+            
+            # Check if discrepancies changed
+            chicken_discrepancy_changed = (
+                (previous_chicken_discrepancy is not None or current_chicken_discrepancy is not None) and 
+                previous_chicken_discrepancy != current_chicken_discrepancy
+            )
+            gizzard_discrepancy_changed = (
+                (previous_gizzard_discrepancy is not None or current_gizzard_discrepancy is not None) and 
+                previous_gizzard_discrepancy != current_gizzard_discrepancy
+            )
+            discrepancy_changes_exist = chicken_discrepancy_changed or gizzard_discrepancy_changed
+        
+        # Only proceed if there are actual changes (stock, parts, or discrepancies)
+        if not stock_changes and not parts_changes and not discrepancy_changes_exist:
+            print("No changes detected in stock, parts, or discrepancies. No alert needed.")
             return True
         
         message = "🔔 *Nasarawa Inventory Changes Detected*\n\n"
         print("Preparing combined changes message")
         
-        # Add stock section if there are stock changes or if parts had changes
-        if stock_changes or parts_changes:
-            message += format_stock_section(stock_changes, stock_data, inventory_data)
+        # Add stock section if there are stock changes, parts changes, or discrepancy changes
+        if stock_changes or parts_changes or discrepancy_changes_exist:
+            message += format_stock_section(stock_changes, stock_data, inventory_data, previous_chicken_discrepancy, previous_gizzard_discrepancy)
             message += "\n"
         
-        # Add parts section if there are parts changes or if stock had changes
-        if parts_changes or stock_changes:
+        # Add parts section if there are parts changes, stock changes, or discrepancy changes
+        if parts_changes or stock_changes or discrepancy_changes_exist:
             message += format_parts_section(parts_changes, parts_data)
             message += "\n"
         
@@ -874,7 +915,7 @@ def main():
         # Send combined alert if there are any changes (including discrepancy changes)
         if stock_changes or parts_changes or chicken_discrepancy_changed or gizzard_discrepancy_changed:
             print("Changes detected, sending combined alert...")
-            if send_combined_alert(webhook_url, stock_changes, stock_data, parts_changes, parts_data, inventory_data):
+            if send_combined_alert(webhook_url, stock_changes, stock_data, parts_changes, parts_data, inventory_data, previous_chicken_discrepancy, previous_gizzard_discrepancy):
                 print("Alert sent successfully, updating state files...")
             else:
                 print("Failed to send alert, but will still update state files...")
