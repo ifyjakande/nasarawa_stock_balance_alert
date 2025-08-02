@@ -666,37 +666,35 @@ def format_stock_section(stock_changes, stock_data, inventory_data=None, previou
         inventory_balance = inventory_data.get('whole_chicken_quantity_stock_balance')
         gizzard_inventory_balance = inventory_data.get('gizzard_weight_stock_balance')
         
-        # Show individual product comparison sections
-        if total_pieces > 0:
-            section += "\n*Whole Chicken Stock Balance Comparison:*\n"
-            if inventory_balance is None:
-                section += "❓ Inventory Records Total: Not Available\n"
+        # Always show individual product comparison sections when inventory data is available
+        section += "\n*Whole Chicken Stock Balance Comparison:*\n"
+        if inventory_balance is None:
+            section += "❓ Inventory Records Total: Not Available\n"
+            section += f"• Specification Sheet Total: {total_pieces:,} pieces\n"
+        else:
+            difference = int(total_pieces - inventory_balance)
+            if difference == 0:
+                section += "✅ Whole chicken stock balance matches inventory records\n"
+            else:
+                section += "⚠️ Whole chicken stock balance discrepancy detected:\n"
                 section += f"• Specification Sheet Total: {total_pieces:,} pieces\n"
-            else:
-                difference = int(total_pieces - inventory_balance)
-                if difference == 0:
-                    section += "✅ Whole chicken stock balance matches inventory records\n"
-                else:
-                    section += "⚠️ Whole chicken stock balance discrepancy detected:\n"
-                    section += f"• Specification Sheet Total: {total_pieces:,} pieces\n"
-                    section += f"• Inventory Records Total: {int(inventory_balance):,} pieces\n"
-                    section += f"• Difference: {abs(difference):,} pieces {'less' if difference < 0 else 'more'} in specification sheet\n"
+                section += f"• Inventory Records Total: {int(inventory_balance):,} pieces\n"
+                section += f"• Difference: {abs(difference):,} pieces {'less' if difference < 0 else 'more'} in specification sheet\n"
         
-        # Add gizzard inventory balance comparison if available
-        if current_gizzard_weight > 0:
-            section += "\n*Gizzard Stock Balance Comparison:*\n"
-            if gizzard_inventory_balance is None:
-                section += "❓ Inventory Records Gizzard: Not Available\n"
-                section += f"• Specification Sheet Gizzard: {current_gizzard_weight:,.2f} kg\n"
+        # Always show gizzard inventory balance comparison when inventory data is available
+        section += "\n*Gizzard Stock Balance Comparison:*\n"
+        if gizzard_inventory_balance is None:
+            section += "❓ Inventory Records Gizzard: Not Available\n"
+            section += f"• Specification Sheet Gizzard: {current_gizzard_weight:,.2f} kg\n"
+        else:
+            difference = current_gizzard_weight - gizzard_inventory_balance
+            if abs(difference) < 0.01:
+                section += "✅ Gizzard stock balance matches inventory records\n"
             else:
-                difference = current_gizzard_weight - gizzard_inventory_balance
-                if abs(difference) < 0.01:
-                    section += "✅ Gizzard stock balance matches inventory records\n"
-                else:
-                    section += "⚠️ Gizzard stock balance discrepancy detected:\n"
-                    section += f"• Specification Sheet Gizzard: {current_gizzard_weight:,.2f} kg\n"
-                    section += f"• Inventory Records Gizzard: {gizzard_inventory_balance:,.2f} kg\n"
-                    section += f"• Difference: {abs(difference):,.2f} kg {'less' if difference < 0 else 'more'} in specification sheet\n"
+                section += "⚠️ Gizzard stock balance discrepancy detected:\n"
+                section += f"• Specification Sheet Gizzard: {current_gizzard_weight:,.2f} kg\n"
+                section += f"• Inventory Records Gizzard: {gizzard_inventory_balance:,.2f} kg\n"
+                section += f"• Difference: {abs(difference):,.2f} kg {'less' if difference < 0 else 'more'} in specification sheet\n"
     
     return section
 
