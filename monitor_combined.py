@@ -666,16 +666,6 @@ def format_stock_section(stock_changes, stock_data, inventory_data=None, previou
         inventory_balance = inventory_data.get('whole_chicken_quantity_stock_balance')
         gizzard_inventory_balance = inventory_data.get('gizzard_weight_stock_balance')
         
-        # Calculate discrepancies
-        chicken_discrepancy = None
-        gizzard_discrepancy = None
-        
-        if total_pieces > 0 and inventory_balance is not None:
-            chicken_discrepancy = int(total_pieces - inventory_balance)
-        
-        if current_gizzard_weight > 0 and gizzard_inventory_balance is not None:
-            gizzard_discrepancy = current_gizzard_weight - gizzard_inventory_balance
-        
         # Show individual product comparison sections
         if total_pieces > 0:
             section += "\n*Whole Chicken Stock Balance Comparison:*\n"
@@ -683,13 +673,14 @@ def format_stock_section(stock_changes, stock_data, inventory_data=None, previou
                 section += "❓ Inventory Records Total: Not Available\n"
                 section += f"• Specification Sheet Total: {total_pieces:,} pieces\n"
             else:
-                if chicken_discrepancy == 0:
-                    section += "✅ Chicken stock balance matches inventory records\n"
+                difference = int(total_pieces - inventory_balance)
+                if difference == 0:
+                    section += "✅ Whole chicken stock balance matches inventory records\n"
                 else:
                     section += "⚠️ Whole chicken stock balance discrepancy detected:\n"
                     section += f"• Specification Sheet Total: {total_pieces:,} pieces\n"
                     section += f"• Inventory Records Total: {int(inventory_balance):,} pieces\n"
-                    section += f"• Difference: {abs(chicken_discrepancy):,} pieces {'less' if chicken_discrepancy < 0 else 'more'} in specification sheet\n"
+                    section += f"• Difference: {abs(difference):,} pieces {'less' if difference < 0 else 'more'} in specification sheet\n"
         
         # Add gizzard inventory balance comparison if available
         if current_gizzard_weight > 0:
@@ -698,13 +689,14 @@ def format_stock_section(stock_changes, stock_data, inventory_data=None, previou
                 section += "❓ Inventory Records Gizzard: Not Available\n"
                 section += f"• Specification Sheet Gizzard: {current_gizzard_weight:,.2f} kg\n"
             else:
-                if gizzard_discrepancy is not None and abs(gizzard_discrepancy) < 0.01:
+                difference = current_gizzard_weight - gizzard_inventory_balance
+                if abs(difference) < 0.01:
                     section += "✅ Gizzard stock balance matches inventory records\n"
                 else:
                     section += "⚠️ Gizzard stock balance discrepancy detected:\n"
                     section += f"• Specification Sheet Gizzard: {current_gizzard_weight:,.2f} kg\n"
                     section += f"• Inventory Records Gizzard: {gizzard_inventory_balance:,.2f} kg\n"
-                    section += f"• Difference: {abs(gizzard_discrepancy):,.2f} kg {'less' if gizzard_discrepancy < 0 else 'more'} in specification sheet\n"
+                    section += f"• Difference: {abs(difference):,.2f} kg {'less' if difference < 0 else 'more'} in specification sheet\n"
     
     return section
 
