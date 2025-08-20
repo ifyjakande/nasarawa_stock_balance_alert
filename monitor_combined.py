@@ -454,6 +454,37 @@ def format_weight_loss_section(inventory_data):
     
     return section + "\n"
 
+def get_weight_per_piece(category_name):
+    """Maps each inventory category to its respective weight per piece.
+    
+    Returns:
+        tuple: (weight_value, is_approximation, approximation_text)
+    """
+    category_lower = category_name.lower().strip()
+    
+    # Handle exact weight categories (e.g., "1kg", "1.1kg", "1.2kg")
+    if category_lower.endswith('kg') and category_lower != 'below 1kg' and category_lower != 'above 2kg':
+        try:
+            weight_str = category_lower.replace('kg', '').strip()
+            weight = float(weight_str)
+            return weight, False, ""
+        except ValueError:
+            pass
+    
+    # Handle approximated categories
+    weight_mappings = {
+        'below 1kg': (0.7, True, "0.7kg/piece"),
+        'above 2kg': (2.0, True, "2kg/piece"),
+        'uncategorised': (1.4, True, "1.4kg/piece")
+    }
+    
+    if category_lower in weight_mappings:
+        weight, is_approx, approx_text = weight_mappings[category_lower]
+        return weight, is_approx, approx_text
+    
+    # Default fallback for unknown categories
+    return 1.0, True, "1kg/piece"
+
 def calculate_total_pieces(stock_data):
     """Calculate total pieces from stock data, excluding Gizzard."""
     try:
@@ -617,6 +648,7 @@ def format_stock_section(stock_changes, stock_data, inventory_data=None, previou
     values = stock_data[1]
     total_pieces = 0
     current_gizzard_weight = 0
+    total_weight_kg = 0
     
     for i in range(len(headers)):
         # Skip 'Specification' header if it exists
@@ -635,6 +667,7 @@ def format_stock_section(stock_changes, stock_data, inventory_data=None, previou
                     if str(val).strip().replace('.', '', 1).isdigit():
                         current_gizzard_weight = float(val)
                         formatted_val = f"{current_gizzard_weight:,.2f} kg"
+                        total_weight_kg += current_gizzard_weight
                     else:
                         formatted_val = str(val)
                 else:
@@ -650,11 +683,28 @@ def format_stock_section(stock_changes, stock_data, inventory_data=None, previou
                         pieces_text = "1 piece" if remaining_pieces == 1 else f"{remaining_pieces} pieces"
                         
                         if bags > 0 and remaining_pieces > 0:
-                            formatted_val = f"{bags_text}, {pieces_text}"
+                            base_formatted_val = f"{bags_text}, {pieces_text}"
                         elif bags > 0:
-                            formatted_val = bags_text
+                            base_formatted_val = bags_text
                         else:
-                            formatted_val = pieces_text
+                            base_formatted_val = pieces_text
+                        
+                        # Add weight information for piece-based categories
+                        if header.lower() != 'total':
+                            weight_per_piece, is_approx, approx_text = get_weight_per_piece(header)
+                            total_weight = total_val * weight_per_piece
+                            total_weight_kg += total_weight
+                            
+                            if is_approx:
+                                weight_display = f"≈ {total_weight:,.1f} kg @ {approx_text}"
+                            else:
+                                weight_display = f"{total_weight:,.1f} kg"
+                            
+                            formatted_val = f"{base_formatted_val} ({weight_display})"
+                        else:
+                            # For Total line, add comprehensive weight information
+                            total_tonnes = total_weight_kg / 1000
+                            formatted_val = f"{base_formatted_val} (≈ {total_weight_kg:,.1f} kg / {total_tonnes:.1f} tonnes)"
                     else:
                         formatted_val = str(val)
                 section += f"• {header}: {formatted_val}\n"
@@ -681,12 +731,9 @@ def format_stock_section(stock_changes, stock_data, inventory_data=None, previou
                 section += f"• Inventory Records Total: {int(inventory_balance):,} pieces\n"
                 section += f"• Difference: {abs(difference):,} pieces {'less' if difference < 0 else 'more'} in specification sheet\n"
         
-        # Always show gizzard inventory balance comparison when inventory data is available
-        section += "\n*Gizzard Stock Balance Comparison:*\n"
-        if gizzard_inventory_balance is None:
-            section += "❓ Inventory Records Gizzard: Not Available\n"
-            section += f"• Specification Sheet Gizzard: {current_gizzard_weight:,.2f} kg\n"
-        else:
+        # Add gizzard inventory balance comparison if available
+        if gizzard_inventory_balance is not None and current_gizzard_weight > 0:
+            section += "\n*Gizzard Stock Balance Comparison:*\n"
             difference = current_gizzard_weight - gizzard_inventory_balance
             if abs(difference) < 0.01:
                 section += "✅ Gizzard stock balance matches inventory records\n"
