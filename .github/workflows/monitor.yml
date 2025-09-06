@@ -40,11 +40,22 @@ jobs:
       env:
         ACTIONS_STEP_DEBUG: false
     
+    - name: Run data transformation
+      env:
+        INVENTORY_SHEET_ID: ${{ secrets.INVENTORY_SHEET_ID }}
+        INVENTORY_ETL_SPREADSHEET_ID: ${{ secrets.INVENTORY_ETL_SPREADSHEET_ID }}
+        ACTIONS_STEP_DEBUG: false
+      run: |
+        python transformation.py
+    
+    - name: Wait 30 seconds
+      run: sleep 30
+    
     - name: Run monitoring script
       env:
         SPACE_WEBHOOK_URL: ${{ secrets.SPACE_WEBHOOK_URL }}
         SPECIFICATION_SHEET_ID: ${{ secrets.SPECIFICATION_SHEET_ID }}
-        INVENTORY_SHEET_ID: ${{ secrets.INVENTORY_SHEET_ID }}
+        INVENTORY_ETL_SPREADSHEET_ID: ${{ secrets.INVENTORY_ETL_SPREADSHEET_ID }}
         SERVICE_ACCOUNT_FILE: service-account.json
         ACTIONS_STEP_DEBUG: false
       run: |

@@ -1,5 +1,7 @@
 import os
 import pickle
+import time
+import random
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -9,12 +11,12 @@ import pytz
 
 # Constants for Stock Balance
 SPECIFICATION_SHEET_ID = os.environ.get('SPECIFICATION_SHEET_ID')
-INVENTORY_SHEET_ID = os.environ.get('INVENTORY_SHEET_ID')
+INVENTORY_ETL_SHEET_ID = os.environ.get('INVENTORY_ETL_SPREADSHEET_ID')
 if not SPECIFICATION_SHEET_ID:
     raise ValueError("SPECIFICATION_SHEET_ID environment variable not set")
 
-if not INVENTORY_SHEET_ID:
-    raise ValueError("INVENTORY_SHEET_ID environment variable not set")
+if not INVENTORY_ETL_SHEET_ID:
+    raise ValueError("INVENTORY_ETL_SPREADSHEET_ID environment variable not set")
     
 STOCK_SHEET_NAME = 'balance'
 STOCK_RANGE = 'A1:P3'  # Range covers A-P columns (Specification through TOTAL including Gizzard)
@@ -44,6 +46,48 @@ class APIError(Exception):
     """Custom exception for API related errors."""
     pass
 
+def exponential_backoff_with_jitter(attempt: int, base_delay: float = 1.0, max_delay: float = 60.0, jitter: bool = True) -> float:
+    """Calculate exponential backoff delay with optional jitter to avoid thundering herd."""
+    delay = min(base_delay * (2 ** attempt), max_delay)
+    if jitter:
+        delay = delay * (0.5 + random.random() * 0.5)  # Add 0-50% jitter
+    return delay
+
+def api_call_with_retry(func, max_retries: int = 5, backoff_base: float = 1.0):
+    """Execute API calls with exponential backoff retry logic for rate limiting."""
+    for attempt in range(max_retries + 1):
+        try:
+            return func()
+        except (HttpError, Exception) as e:
+            error_str = str(e).lower()
+            
+            # Check if it's a rate limit error
+            is_rate_limit = any(keyword in error_str for keyword in [
+                'quota exceeded', 'rate limit', '429', 'too many requests',
+                'user rate limit exceeded', 'rateLimitExceeded'
+            ])
+            
+            # Check if it's a temporary server error
+            is_server_error = any(keyword in error_str for keyword in [
+                '500', '502', '503', '504', 'internal error', 'backend error'
+            ])
+            
+            if attempt == max_retries:
+                print(f"API call failed after {max_retries + 1} attempts: {str(e)}")
+                raise e
+            
+            if is_rate_limit or is_server_error:
+                delay = exponential_backoff_with_jitter(attempt, backoff_base)
+                print(f"API rate limit/server error detected (attempt {attempt + 1}/{max_retries + 1}). "
+                      f"Retrying in {delay:.2f} seconds...")
+                time.sleep(delay)
+                continue
+            else:
+                # Non-retryable error, raise immediately
+                raise e
+    
+    raise Exception(f"API call failed after {max_retries + 1} attempts")
+
 def get_service():
     """Create and return Google Sheets service object."""
     try:
@@ -58,12 +102,15 @@ def get_sheet_data(service, sheet_name, range_name):
     """Fetch data from Google Sheet."""
     print(f"Fetching data from sheet {sheet_name}...")
     try:
-        sheet = service.spreadsheets()
-        result = sheet.values().get(
-            spreadsheetId=SPECIFICATION_SHEET_ID,
-            range=f'{sheet_name}!{range_name}'
-        ).execute()
-        data = result.get('values', [])
+        def _fetch_sheet_data():
+            sheet = service.spreadsheets()
+            result = sheet.values().get(
+                spreadsheetId=SPECIFICATION_SHEET_ID,
+                range=f'{sheet_name}!{range_name}'
+            ).execute()
+            return result.get('values', [])
+        
+        data = api_call_with_retry(_fetch_sheet_data, max_retries=3, backoff_base=1.5)
         
         # Validate data structure
         min_rows = 2  # Both stock and parts sheets now have 2 rows
@@ -284,12 +331,14 @@ def detect_discrepancy_changes(previous_discrepancy, current_discrepancy, produc
 def get_inventory_data(service):
     """Fetch all inventory data from the inflow/release sheet."""
     try:
-        result = service.spreadsheets().values().get(
-            spreadsheetId=INVENTORY_SHEET_ID,
-            range=f'{INVENTORY_SHEET_NAME}!{INVENTORY_RANGE}'
-        ).execute()
+        def _fetch_inventory_data():
+            result = service.spreadsheets().values().get(
+                spreadsheetId=INVENTORY_ETL_SHEET_ID,
+                range=f'{INVENTORY_SHEET_NAME}!{INVENTORY_RANGE}'
+            ).execute()
+            return result.get('values', [])
         
-        data = result.get('values', [])
+        data = api_call_with_retry(_fetch_inventory_data, max_retries=3, backoff_base=1.5)
         if not data:
             print("No data found in inventory sheet")
             return None
@@ -889,8 +938,14 @@ def main():
         # Get current stock data
         stock_data = get_sheet_data(service, STOCK_SHEET_NAME, STOCK_RANGE)
         
+        # Add delay between API calls to avoid rate limits
+        time.sleep(0.5)
+        
         # Get current parts data
         parts_data = get_sheet_data(service, PARTS_SHEET_NAME, PARTS_RANGE)
+        
+        # Add delay between API calls to avoid rate limits
+        time.sleep(0.5)
         
         # Get complete inventory data for comparison and analysis
         inventory_data = get_inventory_data(service)
