@@ -453,6 +453,12 @@ def process_sheets_data(stock_inflow_df: pd.DataFrame,
               (stock_inflow_df['product_type'].isna() | (stock_inflow_df['product_type'] == '')))
         ]
         
+        # Filter out rows where both date and product are empty for release
+        release_df = release_df[
+            ~((release_df['date'].isna() | (release_df['date'] == '')) & 
+              (release_df['product'].isna() | (release_df['product'] == '')))
+        ]
+        
         # Check for rows with missing dates in remaining data for stock_inflow
         missing_dates_inflow = stock_inflow_df[stock_inflow_df['date'].isna() | (stock_inflow_df['date'] == '')]
         missing_dates_release = release_df[release_df['date'].isna() | (release_df['date'] == '')]
