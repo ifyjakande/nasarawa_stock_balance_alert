@@ -1,46 +1,38 @@
-name: Monitor Inventory
+name: Process Inventory and Monitor Changes
 
 on:
   schedule:
     - cron: '*/20 * * * *'  # Runs every 20 minutes
   workflow_dispatch:  # Allows manual triggering
 
+permissions:
+  contents: write  # Allow workflow to commit and push to repository
+
 jobs:
-  monitor:
+  process-and-monitor:
     runs-on: ubuntu-latest
     
     steps:
     - uses: actions/checkout@v3
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
     
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.x'
-    
-    - name: Cache state files
-      uses: actions/cache@v3
-      with:
-        path: |
-          previous_stock_state.pickle
-          previous_parts_state.pickle
-          previous_chicken_discrepancy_state.pickle
-          previous_gizzard_discrepancy_state.pickle
-          failed_webhooks.json
-        key: inventory-state-v2-${{ github.run_number }}
-        restore-keys: |
-          inventory-state-v2-
-    
+        python-version: '3.12'
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-    
-    - name: Create service account file
+
+    - name: Create service account credentials file
       run: |
         echo '${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}' > service-account.json
       env:
         ACTIONS_STEP_DEBUG: false
-    
+
     - name: Run data transformation
       id: transformation
       env:
@@ -48,16 +40,22 @@ jobs:
         INVENTORY_ETL_SPREADSHEET_ID: ${{ secrets.INVENTORY_ETL_SPREADSHEET_ID }}
         ACTIONS_STEP_DEBUG: false
       run: |
+        echo "Starting data transformation..."
         if python transformation.py; then
+          echo "Data transformation completed successfully"
           echo "TRANSFORMATION_SUCCESS=true" >> $GITHUB_ENV
         else
+          echo "❌ Data transformation failed"
           echo "TRANSFORMATION_SUCCESS=false" >> $GITHUB_ENV
           exit 1
         fi
 
     - name: Wait for data propagation
       if: env.TRANSFORMATION_SUCCESS == 'true'
-      run: sleep 30
+      run: |
+        echo "Waiting 30 seconds for Google Sheets data propagation..."
+        sleep 30
+        echo "Proceeding with monitoring"
 
     - name: Run monitoring script
       if: env.TRANSFORMATION_SUCCESS == 'true'
@@ -65,39 +63,112 @@ jobs:
         SPACE_WEBHOOK_URL: ${{ secrets.SPACE_WEBHOOK_URL }}
         SPECIFICATION_SHEET_ID: ${{ secrets.SPECIFICATION_SHEET_ID }}
         INVENTORY_ETL_SPREADSHEET_ID: ${{ secrets.INVENTORY_ETL_SPREADSHEET_ID }}
+        STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
         SERVICE_ACCOUNT_FILE: service-account.json
         ACTIONS_STEP_DEBUG: false
       run: |
+        echo "Starting inventory monitoring..."
         python monitor_combined.py
+        echo "Monitoring completed"
 
-    - name: Check for failed webhooks and send email alert
+    - name: Check for failed webhooks and state read failure alerts
       if: always()
+      env:
+        STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
       run: |
-        if [ -f "failed_webhooks.json" ] && [ -s "failed_webhooks.json" ]; then
-          echo "Failed webhooks detected. Preparing email alert..."
-          FAILED_COUNT=$(wc -l < failed_webhooks.json)
-          echo "FAILED_WEBHOOK_COUNT=$FAILED_COUNT" >> $GITHUB_ENV
-          echo "FAILED_WEBHOOK_ALERT=true" >> $GITHUB_ENV
-          echo "📧 Email alert will be sent for $FAILED_COUNT failed webhook(s)"
+        # Initialize alert flags
+        echo "FAILED_WEBHOOK_ALERT=false" >> $GITHUB_ENV
+        echo "STATE_READ_FAILURE_ALERT=false" >> $GITHUB_ENV
 
-          # Create detailed email body with failed webhook details
-          echo "Failed webhook notifications detected in Nasarawa inventory monitoring system." > email_body.txt
-          echo "" >> email_body.txt
-          echo "Number of failed webhooks: $FAILED_COUNT" >> email_body.txt
-          echo "Run ID: ${{ github.run_number }}" >> email_body.txt
-          echo "Time: $(date -u)" >> email_body.txt
-          echo "" >> email_body.txt
-          echo "Failed webhook details:" >> email_body.txt
-          echo "========================" >> email_body.txt
-          cat failed_webhooks.json >> email_body.txt
-          echo "" >> email_body.txt
-          echo "Please check the failed webhooks artifact for details:" >> email_body.txt
-          echo "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> email_body.txt
-          echo "" >> email_body.txt
-          echo "This means inventory change notifications may not have been delivered to your Google Space." >> email_body.txt
+        # Check for failed webhooks (encrypted)
+        if [ -f "encrypted_states/failed_webhooks.enc" ] && [ -s "encrypted_states/failed_webhooks.enc" ]; then
+          echo "Checking encrypted failed webhooks..."
+
+          # Use Python to decrypt and count failed webhooks
+          WEBHOOK_CHECK_RESULT=$(python3 -c "
+          import os
+          from cryptography.fernet import Fernet
+          import pickle
+
+          try:
+              key = os.environ['STATE_ENCRYPTION_KEY'].encode()
+              fernet = Fernet(key)
+
+              with open('encrypted_states/failed_webhooks.enc', 'rb') as f:
+                  encrypted_data = f.read()
+                  failed_webhooks = pickle.loads(fernet.decrypt(encrypted_data))
+
+              if isinstance(failed_webhooks, list) and len(failed_webhooks) > 0:
+                  print(f'FOUND:{len(failed_webhooks)}')
+                  with open('failed_webhooks_readable.txt', 'w') as f:
+                      for webhook in failed_webhooks:
+                          f.write(f\"Timestamp: {webhook.get('timestamp', 'Unknown')}\\n\")
+                          f.write(f\"Error: {webhook.get('error', 'Unknown')}\\n\")
+                          f.write(f\"Attempts: {webhook.get('attempts', 'Unknown')}\\n\")
+                          f.write('---\\n')
+              else:
+                  print('NONE')
+          except Exception as e:
+              print(f'ERROR:{str(e)}')
+          ")
+
+          if [[ "$WEBHOOK_CHECK_RESULT" == FOUND:* ]]; then
+            FAILED_COUNT=$(echo "$WEBHOOK_CHECK_RESULT" | cut -d: -f2)
+            echo "FAILED_WEBHOOK_COUNT=$FAILED_COUNT" >> $GITHUB_ENV
+            echo "FAILED_WEBHOOK_ALERT=true" >> $GITHUB_ENV
+            echo "📧 Email alert will be sent for $FAILED_COUNT failed webhook(s)"
+
+            # Create detailed email body with failed webhook details
+            echo "Failed webhook notifications detected in Nasarawa inventory monitoring system." > email_body.txt
+            echo "" >> email_body.txt
+            echo "Number of failed webhooks: $FAILED_COUNT" >> email_body.txt
+            echo "Run ID: ${{ github.run_number }}" >> email_body.txt
+            echo "Time: $(date -u)" >> email_body.txt
+            echo "" >> email_body.txt
+            echo "Failed webhook details:" >> email_body.txt
+            echo "========================" >> email_body.txt
+            if [ -f "failed_webhooks_readable.txt" ]; then
+              cat failed_webhooks_readable.txt >> email_body.txt
+            fi
+            echo "" >> email_body.txt
+            echo "This means inventory change notifications may not have been delivered to your Google Space." >> email_body.txt
+          elif [[ "$WEBHOOK_CHECK_RESULT" == ERROR:* ]]; then
+            echo "⚠️ Error checking failed webhooks: $WEBHOOK_CHECK_RESULT"
+          else
+            echo "No failed webhooks found"
+          fi
         else
-          echo "No failed webhooks found"
-          echo "FAILED_WEBHOOK_ALERT=false" >> $GITHUB_ENV
+          echo "No encrypted failed webhooks file found"
+        fi
+
+        # Check for state read failure alerts
+        if [ -f "encrypted_states/state_read_failure_alert.json" ] && [ -s "encrypted_states/state_read_failure_alert.json" ]; then
+          echo "State read failure detected. Preparing email alert..."
+          echo "STATE_READ_FAILURE_ALERT=true" >> $GITHUB_ENV
+          echo "📧 Email alert will be sent for state read failure"
+
+          # Create state read failure email body
+          echo "State read failure detected in Nasarawa inventory monitoring system." > state_read_failure_email_body.txt
+          echo "" >> state_read_failure_email_body.txt
+          echo "Run ID: ${{ github.run_number }}" >> state_read_failure_email_body.txt
+          echo "Time: $(date -u)" >> state_read_failure_email_body.txt
+          echo "" >> state_read_failure_email_body.txt
+          echo "Issue: The monitoring system could not read/decrypt encrypted state files." >> state_read_failure_email_body.txt
+          echo "Impact: No inventory change detection could be performed for this monitoring cycle." >> state_read_failure_email_body.txt
+          echo "" >> state_read_failure_email_body.txt
+          echo "Details:" >> state_read_failure_email_body.txt
+          echo "========" >> state_read_failure_email_body.txt
+          cat encrypted_states/state_read_failure_alert.json >> state_read_failure_email_body.txt
+          echo "" >> state_read_failure_email_body.txt
+          echo "Action Required:" >> state_read_failure_email_body.txt
+          echo "- Check STATE_ENCRYPTION_KEY secret" >> state_read_failure_email_body.txt
+          echo "- Verify encrypted state files are not corrupted" >> state_read_failure_email_body.txt
+          echo "- Check for any changes to encryption implementation" >> state_read_failure_email_body.txt
+          echo "" >> state_read_failure_email_body.txt
+          echo "Workflow Details:" >> state_read_failure_email_body.txt
+          echo "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> state_read_failure_email_body.txt
+        else
+          echo "No state read failure detected"
         fi
 
     - name: Send email alert for failed webhooks
@@ -113,11 +184,15 @@ jobs:
         from: ${{ secrets.EMAIL_SENDER }}
         body: file://email_body.txt
 
-    - name: Upload failed webhooks as artifact
-      if: always()
-      uses: actions/upload-artifact@v4
+    - name: Send email alert for state read failure
+      if: always() && env.STATE_READ_FAILURE_ALERT == 'true'
+      uses: dawidd6/action-send-mail@v3
       with:
-        name: failed-webhooks-${{ github.run_number }}
-        path: failed_webhooks.json
-        if-no-files-found: ignore
-        retention-days: 30
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.EMAIL_USERNAME }}
+        password: ${{ secrets.EMAIL_PASSWORD }}
+        subject: "🔐 Nasarawa Inventory: State Read Failure - Encryption Issue"
+        to: ${{ secrets.EMAIL_RECIPIENTS }}
+        from: ${{ secrets.EMAIL_SENDER }}
+        body: file://state_read_failure_email_body.txt

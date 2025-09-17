@@ -11,6 +11,8 @@ from datetime import datetime
 import pytz
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_exception
 import pybreaker
+from cryptography.fernet import Fernet
+import subprocess
 
 # Constants for Stock Balance
 SPECIFICATION_SHEET_ID = os.environ.get('SPECIFICATION_SHEET_ID')
@@ -37,16 +39,17 @@ SERVICE_ACCOUNT_FILE = os.environ.get('SERVICE_ACCOUNT_FILE', 'service-account.j
 DATA_DIR = os.getenv('GITHUB_WORKSPACE', os.getcwd())
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Separate state files for stock and parts
-STOCK_STATE_FILE = os.path.join(DATA_DIR, 'previous_stock_state.pickle')
-PARTS_STATE_FILE = os.path.join(DATA_DIR, 'previous_parts_state.pickle')
+# Encrypted states directory
+ENCRYPTED_STATES_DIR = os.path.join(DATA_DIR, 'encrypted_states')
+os.makedirs(ENCRYPTED_STATES_DIR, exist_ok=True)
 
-# State files for tracking discrepancies
-CHICKEN_DISCREPANCY_STATE_FILE = os.path.join(DATA_DIR, 'previous_chicken_discrepancy_state.pickle')
-GIZZARD_DISCREPANCY_STATE_FILE = os.path.join(DATA_DIR, 'previous_gizzard_discrepancy_state.pickle')
-
-# Dead Letter Queue file for failed webhooks
-FAILED_WEBHOOKS_FILE = os.path.join(DATA_DIR, 'failed_webhooks.json')
+# Update state file paths to encrypted versions
+STOCK_STATE_FILE = os.path.join(ENCRYPTED_STATES_DIR, 'stock_state.enc')
+PARTS_STATE_FILE = os.path.join(ENCRYPTED_STATES_DIR, 'parts_state.enc')
+WHOLE_CHICKEN_DIFF_STATE_FILE = os.path.join(ENCRYPTED_STATES_DIR, 'whole_chicken_diff_state.enc')
+GIZZARD_DIFF_STATE_FILE = os.path.join(ENCRYPTED_STATES_DIR, 'gizzard_diff_state.enc')
+FAILED_WEBHOOKS_FILE = os.path.join(ENCRYPTED_STATES_DIR, 'failed_webhooks.enc')
+STATE_READ_FAILURE_ALERT_FILE = os.path.join(ENCRYPTED_STATES_DIR, 'state_read_failure_alert.json')
 
 # Circuit breaker for webhook calls
 webhook_circuit_breaker = pybreaker.CircuitBreaker(
@@ -101,6 +104,91 @@ def api_call_with_retry(func, max_retries: int = 5, backoff_base: float = 1.0):
     
     raise Exception(f"API call failed after {max_retries + 1} attempts")
 
+# Encryption/Decryption Functions
+def get_encryption_key():
+    """Get the encryption key from environment variable."""
+    key = os.environ.get('STATE_ENCRYPTION_KEY')
+    if not key:
+        raise ValueError("STATE_ENCRYPTION_KEY environment variable not set")
+    return key.encode()
+
+def encrypt_state_data(data):
+    """Encrypt state data using Fernet."""
+    try:
+        key = get_encryption_key()
+        fernet = Fernet(key)
+        serialized_data = pickle.dumps(data)
+        encrypted_data = fernet.encrypt(serialized_data)
+        return encrypted_data
+    except Exception as e:
+        print(f"Error encrypting state data: {str(e)}")
+        raise
+
+def decrypt_state_data(encrypted_data):
+    """Decrypt state data using Fernet."""
+    try:
+        key = get_encryption_key()
+        fernet = Fernet(key)
+        decrypted_data = fernet.decrypt(encrypted_data)
+        data = pickle.loads(decrypted_data)
+        return data
+    except Exception as e:
+        print(f"Error decrypting state data: {str(e)}")
+        raise
+
+def save_state_read_failure_alert(failed_files, error_message):
+    """Save state read failure alert for email notification."""
+    try:
+        alert_data = {
+            'timestamp': datetime.now(pytz.UTC).astimezone(pytz.timezone('Africa/Lagos')).isoformat(),
+            'event': 'state_decryption_failed',
+            'failed_files': failed_files,
+            'error_message': str(error_message),
+            'run_id': os.environ.get('GITHUB_RUN_NUMBER', 'unknown'),
+            'action_required': 'Check STATE_ENCRYPTION_KEY secret and encrypted state files'
+        }
+
+        with open(STATE_READ_FAILURE_ALERT_FILE, 'w', encoding='utf-8') as f:
+            json.dump(alert_data, f, ensure_ascii=False, indent=2)
+
+        print(f"State read failure alert saved to: {STATE_READ_FAILURE_ALERT_FILE}")
+        return True
+    except Exception as e:
+        print(f"Error saving state read failure alert: {str(e)}")
+        return False
+
+def commit_encrypted_state_files():
+    """Commit encrypted state files to repository."""
+    try:
+        # Configure git
+        subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'],
+                      cwd=DATA_DIR, check=True)
+        subprocess.run(['git', 'config', 'user.email', 'github-actions[bot]@users.noreply.github.com'],
+                      cwd=DATA_DIR, check=True)
+
+        # Add encrypted state files
+        subprocess.run(['git', 'add', 'encrypted_states/'], cwd=DATA_DIR, check=True)
+
+        # Check if there are changes to commit
+        result = subprocess.run(['git', 'diff', '--cached', '--exit-code'],
+                               cwd=DATA_DIR, capture_output=True)
+
+        if result.returncode != 0:  # There are changes to commit
+            commit_message = f"Update encrypted state files - Run {os.environ.get('GITHUB_RUN_NUMBER', 'unknown')}"
+            subprocess.run(['git', 'commit', '-m', commit_message], cwd=DATA_DIR, check=True)
+            subprocess.run(['git', 'push'], cwd=DATA_DIR, check=True)
+            print("Encrypted state files committed and pushed successfully")
+        else:
+            print("No changes to encrypted state files - nothing to commit")
+
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Error committing encrypted state files: {str(e)}")
+        return False
+    except Exception as e:
+        print(f"Unexpected error committing encrypted state files: {str(e)}")
+        return False
+
 def get_service():
     """Create and return Google Sheets service object."""
     try:
@@ -140,41 +228,61 @@ def get_sheet_data(service, sheet_name, range_name):
         raise APIError(f"Unexpected error while fetching data from {sheet_name}")
 
 def load_previous_state(state_file):
-    """Load previous state from file."""
-    print(f"Checking for previous state file {state_file}")
+    """Load previous state from encrypted file."""
+    print(f"Checking for previous encrypted state file {state_file}")
     try:
         if os.path.exists(state_file):
-            print(f"Loading previous state from {state_file}")
+            print(f"Loading and decrypting previous state from {state_file}")
             with open(state_file, 'rb') as f:
-                data = pickle.load(f)
-                min_rows = 2  # Both state files now expect 2 rows
-                if not data or len(data) < min_rows:
-                    print("Invalid state data found, treating as no previous state")
-                    return None
-                print("Previous state loaded successfully")
+                encrypted_data = f.read()
+                data = decrypt_state_data(encrypted_data)
+
+                # Check if this is a difference state file (contains single value)
+                if 'diff_state' in state_file:
+                    if not isinstance(data, (int, float)) and data is not None:
+                        print("Invalid difference state data found, treating as no previous state")
+                        return None
+                else:
+                    # Stock and parts state files expect 2 rows
+                    min_rows = 2
+                    if not data or len(data) < min_rows:
+                        print("Invalid state data found, treating as no previous state")
+                        return None
+                print("Previous state loaded and decrypted successfully")
                 return data
-        print("No previous state file found")
+        print("No previous encrypted state file found")
         return None
     except Exception as e:
-        print(f"Error loading previous state: {str(e)}")
+        print(f"Error loading/decrypting previous state: {str(e)}")
+        # Save alert for state read failure
+        filename = os.path.basename(state_file)
+        save_state_read_failure_alert([filename], str(e))
         return None
 
 def save_current_state(state, state_file):
-    """Save current state to file."""
-    min_rows = 2  # Both state files now expect 2 rows
-    if not state or len(state) < min_rows:
-        print("Invalid state data, skipping save")
-        return
-        
-    print(f"Saving current state to {state_file}")
+    """Save current state to encrypted file."""
+    # Check if this is a difference state file (contains single value)
+    if 'diff_state' in state_file:
+        if not isinstance(state, (int, float)) and state is not None:
+            print("Invalid difference state data, skipping save")
+            return
+    else:
+        # Stock and parts state files expect 2 rows
+        min_rows = 2
+        if not state or len(state) < min_rows:
+            print("Invalid state data, skipping save")
+            return
+
+    print(f"Encrypting and saving current state to {state_file}")
     try:
         os.makedirs(os.path.dirname(state_file), exist_ok=True)
+        encrypted_data = encrypt_state_data(state)
         with open(state_file, 'wb') as f:
-            pickle.dump(state, f)
-        print(f"State saved successfully to {state_file}")
+            f.write(encrypted_data)
+        print(f"State encrypted and saved successfully to {state_file}")
     except Exception as e:
-        print(f"Error saving state: {str(e)}")
-        raise APIError("Failed to save state file")
+        print(f"Error encrypting/saving state: {str(e)}")
+        raise APIError("Failed to save encrypted state file")
 
 def detect_stock_changes(previous_data, current_data):
     """Detect changes between previous and current stock data."""
@@ -293,28 +401,33 @@ def detect_parts_changes(previous_data, current_data):
         return []
 
 def load_previous_discrepancy_state(state_file):
-    """Load previous discrepancy state from file."""
+    """Load previous discrepancy state from encrypted file."""
     print(f"Checking for previous discrepancy state file {state_file}")
     try:
         if os.path.exists(state_file):
             print(f"Loading previous discrepancy state from {state_file}")
             with open(state_file, 'rb') as f:
-                data = pickle.load(f)
+                encrypted_data = f.read()
+                data = decrypt_state_data(encrypted_data)
                 print("Previous discrepancy state loaded successfully")
                 return data
         print("No previous discrepancy state file found")
         return None
     except Exception as e:
         print(f"Error loading previous discrepancy state: {str(e)}")
+        # Save alert for state read failure
+        filename = os.path.basename(state_file)
+        save_state_read_failure_alert([filename], str(e))
         return None
 
 def save_discrepancy_state(discrepancy_value, state_file):
-    """Save discrepancy state to file."""
+    """Save discrepancy state to encrypted file."""
     print(f"Saving discrepancy state to {state_file}")
     try:
         os.makedirs(os.path.dirname(state_file), exist_ok=True)
+        encrypted_data = encrypt_state_data(discrepancy_value)
         with open(state_file, 'wb') as f:
-            pickle.dump(discrepancy_value, f)
+            f.write(encrypted_data)
         print(f"Discrepancy state saved successfully to {state_file}")
     except Exception as e:
         print(f"Error saving discrepancy state: {str(e)}")
@@ -892,7 +1005,7 @@ def should_retry_webhook(exception):
 
 
 def save_failed_webhook(payload, error_msg, webhook_url):
-    """Save failed webhook to dead letter queue for manual review"""
+    """Save failed webhook to encrypted dead letter queue for manual review"""
     try:
         failed_webhook = {
             'payload': payload,
@@ -903,39 +1016,58 @@ def save_failed_webhook(payload, error_msg, webhook_url):
             'status': 'failed'
         }
 
-        # Append to failed webhooks file
-        with open(FAILED_WEBHOOKS_FILE, 'a', encoding='utf-8') as f:
-            json.dump(failed_webhook, f, ensure_ascii=False)
-            f.write('\n')
+        # Load existing failed webhooks or start with empty list
+        existing_webhooks = []
+        if os.path.exists(FAILED_WEBHOOKS_FILE):
+            try:
+                with open(FAILED_WEBHOOKS_FILE, 'rb') as f:
+                    encrypted_data = f.read()
+                    existing_webhooks = decrypt_state_data(encrypted_data)
+                    if not isinstance(existing_webhooks, list):
+                        existing_webhooks = []
+            except Exception as e:
+                print(f"Warning: Could not load existing failed webhooks: {str(e)}")
+                existing_webhooks = []
 
-        print(f"Failed webhook saved to dead letter queue: {FAILED_WEBHOOKS_FILE}")
+        # Append new failed webhook
+        existing_webhooks.append(failed_webhook)
+
+        # Encrypt and save updated list
+        encrypted_data = encrypt_state_data(existing_webhooks)
+        os.makedirs(os.path.dirname(FAILED_WEBHOOKS_FILE), exist_ok=True)
+        with open(FAILED_WEBHOOKS_FILE, 'wb') as f:
+            f.write(encrypted_data)
+
+        print(f"Failed webhook saved to encrypted dead letter queue: {FAILED_WEBHOOKS_FILE}")
         return True
     except Exception as e:
-        print(f"Error saving failed webhook to dead letter queue: {str(e)}")
+        print(f"Error saving failed webhook to encrypted dead letter queue: {str(e)}")
         return False
 
 
 def check_failed_webhooks():
-    """Check and report on failed webhooks in the dead letter queue"""
+    """Check and report on failed webhooks in the encrypted dead letter queue"""
     try:
         if not os.path.exists(FAILED_WEBHOOKS_FILE):
+            print("✅ No failed webhooks in queue")
             return
 
-        # Count failed webhooks
-        failed_count = 0
-        with open(FAILED_WEBHOOKS_FILE, 'r', encoding='utf-8') as f:
-            for line in f:
-                if line.strip():
-                    failed_count += 1
+        # Load and decrypt failed webhooks
+        with open(FAILED_WEBHOOKS_FILE, 'rb') as f:
+            encrypted_data = f.read()
+            failed_webhooks = decrypt_state_data(encrypted_data)
 
-        if failed_count > 0:
-            print(f"⚠️  Warning: {failed_count} failed webhooks found in dead letter queue")
+        if isinstance(failed_webhooks, list) and len(failed_webhooks) > 0:
+            failed_count = len(failed_webhooks)
+            print(f"⚠️  Warning: {failed_count} failed webhooks found in encrypted dead letter queue")
             print(f"Review failed webhooks at: {FAILED_WEBHOOKS_FILE}")
         else:
             print("✅ No failed webhooks in queue")
 
     except Exception as e:
-        print(f"Error checking failed webhooks: {str(e)}")
+        print(f"Error checking encrypted failed webhooks: {str(e)}")
+        # Save alert for state read failure if decryption fails
+        save_state_read_failure_alert(['failed_webhooks.enc'], str(e))
 
 
 def send_combined_alert(webhook_url, stock_changes, stock_data, parts_changes, parts_data, inventory_data=None, previous_chicken_discrepancy=None, previous_gizzard_discrepancy=None):
@@ -1031,6 +1163,12 @@ def main():
             raise ValueError("SPACE_WEBHOOK_URL environment variable not set")
         print("Webhook URL configured")
 
+        # Clear any previous state read failure alert file first
+        if os.path.exists(STATE_READ_FAILURE_ALERT_FILE):
+            os.remove(STATE_READ_FAILURE_ALERT_FILE)
+
+        print("✅ Using encrypted state files for reliable change detection")
+
         # Check for any previously failed webhooks
         check_failed_webhooks()
 
@@ -1058,8 +1196,8 @@ def main():
         previous_parts_data = load_previous_state(PARTS_STATE_FILE)
         
         # Load previous discrepancy states
-        previous_chicken_discrepancy = load_previous_discrepancy_state(CHICKEN_DISCREPANCY_STATE_FILE)
-        previous_gizzard_discrepancy = load_previous_discrepancy_state(GIZZARD_DISCREPANCY_STATE_FILE)
+        previous_chicken_discrepancy = load_previous_discrepancy_state(WHOLE_CHICKEN_DIFF_STATE_FILE)
+        previous_gizzard_discrepancy = load_previous_discrepancy_state(GIZZARD_DIFF_STATE_FILE)
         
         # Calculate current discrepancies
         current_chicken_discrepancy = calculate_chicken_discrepancy(stock_data, inventory_data)
@@ -1111,10 +1249,14 @@ def main():
         
         # Update discrepancy state files only if inventory data is available
         if inventory_data is not None:
-            save_discrepancy_state(current_chicken_discrepancy, CHICKEN_DISCREPANCY_STATE_FILE)
-            save_discrepancy_state(current_gizzard_discrepancy, GIZZARD_DISCREPANCY_STATE_FILE)
+            save_discrepancy_state(current_chicken_discrepancy, WHOLE_CHICKEN_DIFF_STATE_FILE)
+            save_discrepancy_state(current_gizzard_discrepancy, GIZZARD_DIFF_STATE_FILE)
         else:
             print("Inventory data unavailable, preserving previous discrepancy state")
+
+        # Commit encrypted state files to repository
+        print("Committing encrypted state files to repository...")
+        commit_encrypted_state_files()
 
     except APIError as e:
         print(f"API Error: {str(e)}")
