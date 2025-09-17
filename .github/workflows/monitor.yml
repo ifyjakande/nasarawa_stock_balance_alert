@@ -42,17 +42,25 @@ jobs:
         ACTIONS_STEP_DEBUG: false
     
     - name: Run data transformation
+      id: transformation
       env:
         INVENTORY_SHEET_ID: ${{ secrets.INVENTORY_SHEET_ID }}
         INVENTORY_ETL_SPREADSHEET_ID: ${{ secrets.INVENTORY_ETL_SPREADSHEET_ID }}
         ACTIONS_STEP_DEBUG: false
       run: |
-        python transformation.py
-    
-    - name: Wait 30 seconds
+        if python transformation.py; then
+          echo "TRANSFORMATION_SUCCESS=true" >> $GITHUB_ENV
+        else
+          echo "TRANSFORMATION_SUCCESS=false" >> $GITHUB_ENV
+          exit 1
+        fi
+
+    - name: Wait for data propagation
+      if: env.TRANSFORMATION_SUCCESS == 'true'
       run: sleep 30
-    
+
     - name: Run monitoring script
+      if: env.TRANSFORMATION_SUCCESS == 'true'
       env:
         SPACE_WEBHOOK_URL: ${{ secrets.SPACE_WEBHOOK_URL }}
         SPECIFICATION_SHEET_ID: ${{ secrets.SPECIFICATION_SHEET_ID }}
