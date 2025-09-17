@@ -4,4 +4,6 @@ google-auth-oauthlib==1.1.0
 requests==2.31.0
 pytz==2024.1
 pandas>=2.2.0
-gspread==5.11.3 
+gspread==5.11.3
+tenacity==8.2.3
+pybreaker==1.0.2 

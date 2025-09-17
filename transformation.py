@@ -79,7 +79,7 @@ def get_credentials(credentials_file: str) -> service_account.Credentials:
 
 def connect_to_sheets(credentials: service_account.Credentials, spreadsheet_id: str) -> gspread.Spreadsheet:
     try:
-        gc = gspread.authorize(credentials)
+        gc = gspread.Client(auth=credentials)
         return gc.open_by_key(spreadsheet_id)
     except Exception as e:
         raise DataProcessingError(f"Failed to connect to Google Sheets: {str(e)}")

@@ -2,12 +2,15 @@ import os
 import pickle
 import time
 import random
+import json
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import requests
 from datetime import datetime
 import pytz
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+import pybreaker
 
 # Constants for Stock Balance
 SPECIFICATION_SHEET_ID = os.environ.get('SPECIFICATION_SHEET_ID')
@@ -41,6 +44,16 @@ PARTS_STATE_FILE = os.path.join(DATA_DIR, 'previous_parts_state.pickle')
 # State files for tracking discrepancies
 CHICKEN_DISCREPANCY_STATE_FILE = os.path.join(DATA_DIR, 'previous_chicken_discrepancy_state.pickle')
 GIZZARD_DISCREPANCY_STATE_FILE = os.path.join(DATA_DIR, 'previous_gizzard_discrepancy_state.pickle')
+
+# Dead Letter Queue file for failed webhooks
+FAILED_WEBHOOKS_FILE = os.path.join(DATA_DIR, 'failed_webhooks.json')
+
+# Circuit breaker for webhook calls
+webhook_circuit_breaker = pybreaker.CircuitBreaker(
+    fail_max=5,           # Open circuit after 5 consecutive failures
+    reset_timeout=60,     # Try again after 60 seconds
+    exclude=[requests.exceptions.HTTPError]  # Don't count 4xx errors as failures
+)
 
 class APIError(Exception):
     """Custom exception for API related errors."""
@@ -862,6 +875,69 @@ def format_parts_section(parts_changes, parts_data):
     return section
 
 
+def should_retry_webhook(exception):
+    """Determine if webhook should be retried based on error type"""
+    if isinstance(exception, requests.exceptions.HTTPError):
+        # Don't retry 4xx client errors (permanent failures)
+        if 400 <= exception.response.status_code < 500:
+            return False
+        # Retry 5xx server errors (temporary failures)
+        return 500 <= exception.response.status_code < 600
+    # Retry network errors, timeouts, etc.
+    if isinstance(exception, (requests.exceptions.ConnectionError,
+                             requests.exceptions.Timeout,
+                             requests.exceptions.RequestException)):
+        return True
+    return False
+
+
+def save_failed_webhook(payload, error_msg, webhook_url):
+    """Save failed webhook to dead letter queue for manual review"""
+    try:
+        failed_webhook = {
+            'payload': payload,
+            'webhook_url': webhook_url,
+            'error': str(error_msg),
+            'timestamp': datetime.now(pytz.UTC).astimezone(pytz.timezone('Africa/Lagos')).isoformat(),
+            'attempts': 5,
+            'status': 'failed'
+        }
+
+        # Append to failed webhooks file
+        with open(FAILED_WEBHOOKS_FILE, 'a', encoding='utf-8') as f:
+            json.dump(failed_webhook, f, ensure_ascii=False)
+            f.write('\n')
+
+        print(f"Failed webhook saved to dead letter queue: {FAILED_WEBHOOKS_FILE}")
+        return True
+    except Exception as e:
+        print(f"Error saving failed webhook to dead letter queue: {str(e)}")
+        return False
+
+
+def check_failed_webhooks():
+    """Check and report on failed webhooks in the dead letter queue"""
+    try:
+        if not os.path.exists(FAILED_WEBHOOKS_FILE):
+            return
+
+        # Count failed webhooks
+        failed_count = 0
+        with open(FAILED_WEBHOOKS_FILE, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.strip():
+                    failed_count += 1
+
+        if failed_count > 0:
+            print(f"⚠️  Warning: {failed_count} failed webhooks found in dead letter queue")
+            print(f"Review failed webhooks at: {FAILED_WEBHOOKS_FILE}")
+        else:
+            print("✅ No failed webhooks in queue")
+
+    except Exception as e:
+        print(f"Error checking failed webhooks: {str(e)}")
+
+
 def send_combined_alert(webhook_url, stock_changes, stock_data, parts_changes, parts_data, inventory_data=None, previous_chicken_discrepancy=None, previous_gizzard_discrepancy=None):
     """Send combined alert to Google Space."""
     try:
@@ -913,13 +989,37 @@ def send_combined_alert(webhook_url, stock_changes, stock_data, parts_changes, p
             "text": message
         }
         
-        print("Sending webhook request...")
-        response = requests.post(webhook_url, json=payload, timeout=10)  # Add timeout
-        response.raise_for_status()  # Raise exception for bad status codes
-        print(f"Webhook response status: {response.status_code}")
+        @webhook_circuit_breaker
+        @retry(
+            retry=retry_if_exception(should_retry_webhook),
+            stop=stop_after_attempt(5),
+            wait=wait_exponential(multiplier=1, min=1, max=30),
+            before_sleep=lambda retry_state: print(f"Webhook failed, retrying in {retry_state.next_action.sleep} seconds... (attempt {retry_state.attempt_number})")
+        )
+        def _send_webhook_with_circuit_breaker():
+            print("Sending webhook request...")
+            response = requests.post(webhook_url, json=payload, timeout=10)
+            response.raise_for_status()  # Raise exception for bad status codes
+            print(f"Webhook response status: {response.status_code}")
+            return response
+
+        _send_webhook_with_circuit_breaker()
         return True
+    except pybreaker.CircuitBreakerOpenException:
+        print("Circuit breaker is open - webhook service appears to be down, skipping this attempt")
+
+        # Save failed webhook to dead letter queue
+        if save_failed_webhook(payload, "Circuit breaker open - service unavailable", webhook_url):
+            print("Failed webhook saved for manual review")
+
+        return False
     except requests.exceptions.RequestException as e:
-        print(f"Error sending alert to Google Space: {str(e)}")
+        print(f"Error sending alert to Google Space after all retries: {str(e)}")
+
+        # Save failed webhook to dead letter queue
+        if save_failed_webhook(payload, e, webhook_url):
+            print("Failed webhook saved for manual review")
+
         return False
 
 
@@ -930,6 +1030,9 @@ def main():
         if not webhook_url:
             raise ValueError("SPACE_WEBHOOK_URL environment variable not set")
         print("Webhook URL configured")
+
+        # Check for any previously failed webhooks
+        check_failed_webhooks()
 
         # Initialize the Sheets API service
         print("Initializing Google Sheets service...")
