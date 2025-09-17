@@ -9,7 +9,7 @@ from googleapiclient.errors import HttpError
 import requests
 from datetime import datetime
 import pytz
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_exception
 import pybreaker
 
 # Constants for Stock Balance
