@@ -1,1 +1,4 @@
 pullus-pipeline-40a5302e034d.json
+
+# Encrypted state files - ignored locally but force-added by GitHub Actions
+encrypted_states/
