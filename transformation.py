@@ -6,8 +6,7 @@ import gspread
 import os
 import time
 import random
-from typing import Tuple, Dict, List, Any
-from datetime import datetime
+from typing import Tuple, Any
 
 SHEET_NAMES = {
     'STOCK_INFLOW': 'stock_inflow',
@@ -277,6 +276,92 @@ def create_summary_df(stock_inflow_df: pd.DataFrame, release_df: pd.DataFrame) -
                 else:
                     summary_df[col_name] = 0
 
+        # Add customer type breakdown columns for specific products
+        target_products = ['whole chicken', 'gizzard']
+
+        if 'customer_type' in release_df.columns:
+            # Get unique customer types
+            customer_types = release_df['customer_type'].dropna().unique()
+
+            for target_product in target_products:
+                # Check if this product exists in release data
+                product_exists = release_df['product'].str.contains(target_product, case=False, na=False).any()
+
+                if product_exists:
+                    for customer_type in customer_types:
+                        # Filter data for specific product and customer type
+                        filtered_data = release_df[
+                            (release_df['product'].str.contains(target_product, case=False, na=False)) &
+                            (release_df['customer_type'] == customer_type)
+                        ]
+
+                        if not filtered_data.empty:
+                            # Clean customer type name for column naming
+                            clean_customer_type = customer_type.replace(' ', '_').replace('-', '_').lower()
+                            clean_product = target_product.replace(' ', '_').lower()
+
+                            # Create aggregation dictionary
+                            agg_dict = {}
+                            if 'quantity' in filtered_data.columns and filtered_data['quantity'].notna().any():
+                                agg_dict['quantity'] = 'sum'
+                            if 'weight' in filtered_data.columns and filtered_data['weight'].notna().any():
+                                agg_dict['weight'] = 'sum'
+
+                            if agg_dict:
+                                # Aggregate by year_month
+                                customer_product_summary = filtered_data.groupby('year_month').agg(agg_dict)
+
+                                # Add columns to summary_df
+                                if 'quantity' in agg_dict:
+                                    col_name = f'{clean_product}_release_{clean_customer_type}_quantity'
+                                    summary_df[col_name] = summary_df['year_month'].map(
+                                        customer_product_summary['quantity']).fillna(0)
+
+                                if 'weight' in agg_dict:
+                                    col_name = f'{clean_product}_release_{clean_customer_type}_weight'
+                                    summary_df[col_name] = summary_df['year_month'].map(
+                                        customer_product_summary['weight']).fillna(0)
+
+            # Validation: Ensure customer type columns sum to total columns
+            for target_product in target_products:
+                clean_product = target_product.replace(' ', '_').lower()
+
+                # Check quantity validation
+                total_qty_col = f'total_{clean_product}_release_quantity'
+                if total_qty_col in summary_df.columns:
+                    customer_qty_cols = [col for col in summary_df.columns
+                                       if col.startswith(f'{clean_product}_release_')
+                                       and col.endswith('_quantity')]
+
+                    if customer_qty_cols:
+                        customer_sum = summary_df[customer_qty_cols].sum(axis=1)
+                        total_values = summary_df[total_qty_col]
+
+                        # Allow for small floating point differences
+                        tolerance = 0.001
+                        discrepancies = abs(customer_sum - total_values) > tolerance
+
+                        if discrepancies.any():
+                            raise DataProcessingError(f"Customer type quantity validation failed for {target_product}. Contact administrator to review data integrity.")
+
+                # Check weight validation
+                total_wt_col = f'total_{clean_product}_release_weight'
+                if total_wt_col in summary_df.columns:
+                    customer_wt_cols = [col for col in summary_df.columns
+                                      if col.startswith(f'{clean_product}_release_')
+                                      and col.endswith('_weight')]
+
+                    if customer_wt_cols:
+                        customer_sum = summary_df[customer_wt_cols].sum(axis=1)
+                        total_values = summary_df[total_wt_col]
+
+                        # Allow for small floating point differences
+                        tolerance = 0.001
+                        discrepancies = abs(customer_sum - total_values) > tolerance
+
+                        if discrepancies.any():
+                            raise DataProcessingError(f"Customer type weight validation failed for {target_product}. Contact administrator to review data integrity.")
+
         # Sort by year_month in ascending order to process chronologically
         summary_df['sort_date'] = pd.to_datetime(summary_df['year_month'], format='%Y-%b')
         summary_df = summary_df.sort_values('sort_date')
@@ -471,7 +556,33 @@ def process_sheets_data(stock_inflow_df: pd.DataFrame,
         
         stock_inflow_df = standardize_dates(stock_inflow_df)
         release_df = standardize_dates(release_df)
-        
+
+        # Validate customer_type column exists and has no missing values
+        if 'customer_type' not in release_df.columns:
+            raise DataProcessingError("customer_type column is missing from release sheet. All records must have customer type values.")
+
+        # Check for various forms of missing customer type values
+        missing_customer_types = (
+            release_df['customer_type'].isna() |
+            (release_df['customer_type'] == '') |
+            (release_df['customer_type'].str.strip() == '') |
+            (release_df['customer_type'].str.lower() == 'nan') |
+            (release_df['customer_type'].str.lower() == 'none')
+        )
+
+        if missing_customer_types.any():
+            missing_count = missing_customer_types.sum()
+            # Get row indices for better error reporting (adding 2 to account for header and 0-indexing)
+            missing_rows = release_df[missing_customer_types].index + 2
+            row_list = ', '.join(map(str, missing_rows.tolist()[:10]))  # Show first 10 rows
+            row_suffix = f" (showing first 10)" if len(missing_rows) > 10 else ""
+
+            raise DataProcessingError(
+                f"Found {missing_count} records with missing customer_type values in release sheet. "
+                f"All records must have valid customer type values. "
+                f"Check spreadsheet rows: {row_list}{row_suffix}"
+            )
+
         # Set gizzard quantity to 0 in release data (gizzard is sold by weight, not quantity)
         if 'product' in release_df.columns and 'quantity' in release_df.columns:
             release_df.loc[
