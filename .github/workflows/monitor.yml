@@ -2,7 +2,7 @@ name: Process Inventory and Monitor Changes
 
 on:
   schedule:
-    - cron: '*/20 * * * *'  # Runs every 20 minutes
+    - cron: '13-59/20 * * * *'  # Runs every 20 minutes
   workflow_dispatch:  # Allows manual triggering
 
 permissions:

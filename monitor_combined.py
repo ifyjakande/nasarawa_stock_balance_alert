@@ -199,33 +199,39 @@ def get_service():
         print(f"Error initializing Google Sheets service: {str(e)}")
         raise APIError("Failed to initialize Google Sheets service")
 
-def get_sheet_data(service, sheet_name, range_name):
-    """Fetch data from Google Sheet."""
-    print(f"Fetching data from sheet {sheet_name}...")
+def get_sheet_data_batch(service, sheet_ranges):
+    """Fetch data for multiple sheet ranges from Google Sheet in one batchGet call."""
+    sheet_names = ', '.join(sheet_name for sheet_name, _ in sheet_ranges)
+    print(f"Fetching data from sheets {sheet_names}...")
     try:
         def _fetch_sheet_data():
             sheet = service.spreadsheets()
-            result = sheet.values().get(
+            result = sheet.values().batchGet(
                 spreadsheetId=SPECIFICATION_SHEET_ID,
-                range=f'{sheet_name}!{range_name}'
+                ranges=[f'{sheet_name}!{range_name}' for sheet_name, range_name in sheet_ranges]
             ).execute()
-            return result.get('values', [])
-        
-        data = api_call_with_retry(_fetch_sheet_data, max_retries=3, backoff_base=1.5)
-        
-        # Validate data structure
-        min_rows = 2  # Both stock and parts sheets now have 2 rows
-        if not data or len(data) < min_rows:
-            raise APIError(f"Invalid data structure received from Google Sheets for {sheet_name}")
-            
-        print(f"Data fetched successfully from {sheet_name}")
-        return data
+            return result.get('valueRanges', [])
+
+        value_ranges = api_call_with_retry(_fetch_sheet_data, max_retries=3, backoff_base=1.5)
+
+        all_data = []
+        for (sheet_name, _), value_range in zip(sheet_ranges, value_ranges):
+            data = value_range.get('values', [])
+
+            # Validate data structure
+            min_rows = 2  # Both stock and parts sheets now have 2 rows
+            if not data or len(data) < min_rows:
+                raise APIError(f"Invalid data structure received from Google Sheets for {sheet_name}")
+
+            print(f"Data fetched successfully from {sheet_name}")
+            all_data.append(data)
+        return all_data
     except HttpError as e:
         print(f"Google Sheets API error: {str(e)}")
-        raise APIError(f"Failed to fetch data from Google Sheets for {sheet_name}")
+        raise APIError(f"Failed to fetch data from Google Sheets for {sheet_names}")
     except Exception as e:
         print(f"Unexpected error fetching sheet data: {str(e)}")
-        raise APIError(f"Unexpected error while fetching data from {sheet_name}")
+        raise APIError(f"Unexpected error while fetching data from {sheet_names}")
 
 def load_previous_state(state_file):
     """Load previous state from encrypted file."""
@@ -1176,15 +1182,11 @@ def main():
         print("Initializing Google Sheets service...")
         service = get_service()
         
-        # Get current stock data
-        stock_data = get_sheet_data(service, STOCK_SHEET_NAME, STOCK_RANGE)
-        
-        # Add delay between API calls to avoid rate limits
-        time.sleep(0.5)
-        
-        # Get current parts data
-        parts_data = get_sheet_data(service, PARTS_SHEET_NAME, PARTS_RANGE)
-        
+        # Get current stock and parts data in a single batch call
+        stock_data, parts_data = get_sheet_data_batch(
+            service, [(STOCK_SHEET_NAME, STOCK_RANGE), (PARTS_SHEET_NAME, PARTS_RANGE)]
+        )
+
         # Add delay between API calls to avoid rate limits
         time.sleep(0.5)
         
